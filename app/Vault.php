@@ -66,12 +66,13 @@ final class Vault
               CREATE INDEX IF NOT EXISTS album_items_image ON album_items(image_id);');
             // Columns added after the first release. Phase, preview counters, owners, when a request started and whether its
             // process holds a lock, the custom order, the chosen cover of each image's versions, whether an item is hidden from
-            // the library and the stack it was grouped into (a random id) hold no user content; the
+            // the library and the stack it was grouped into (a random id), and whether an album's items show in the
+            // library hold no user content; the
             // balance settings and the account's preferences (the reader's settings) are sealed like the API key, and a story's
             // character sheets, its comic adaptation (with the adaptation's own bible, plan and sheets) and a visual novel's
             // settings and art like its bible.
             foreach (['jobs'=>['phase'=>'TEXT', 'preview'=>'INTEGER NOT NULL DEFAULT 0', 'user_id'=>'TEXT', 'started'=>'INTEGER', 'worker_lock'=>'INTEGER NOT NULL DEFAULT 0'], 'images'=>['user_id'=>'TEXT', 'position'=>'REAL', 'cover'=>'INTEGER NOT NULL DEFAULT 0', 'hidden'=>'INTEGER NOT NULL DEFAULT 0', 'stack'=>'TEXT'],
-                'users'=>['billing'=>'BLOB', 'claude_key'=>'BLOB', 'prefs'=>'BLOB', 'gemini_key'=>'BLOB'], 'stories'=>['cast'=>'BLOB', 'comic'=>'BLOB', 'vn'=>'BLOB', 'vn_art'=>'BLOB', 'comic_notes'=>'BLOB', 'comic_plan'=>'BLOB', 'comic_cast'=>'BLOB']] as $table => $added) {
+                'users'=>['billing'=>'BLOB', 'claude_key'=>'BLOB', 'prefs'=>'BLOB', 'gemini_key'=>'BLOB'], 'albums'=>['library'=>'INTEGER NOT NULL DEFAULT 1'], 'stories'=>['cast'=>'BLOB', 'comic'=>'BLOB', 'vn'=>'BLOB', 'vn_art'=>'BLOB', 'comic_notes'=>'BLOB', 'comic_plan'=>'BLOB', 'comic_cast'=>'BLOB']] as $table => $added) {
                 $columns = array_column($this->db->query("PRAGMA table_info($table)")->fetchAll(), 'name');
                 foreach ($added as $column => $type) {
                     if (in_array($column, $columns, true)) continue;
@@ -207,17 +208,21 @@ final class Vault
         return ['mime'=>$alpha ? 'image/png' : 'image/jpeg', 'data'=>base64_encode($data)];
     }
 
-    public function saveImage(string $bytes, array $meta, string $key): array
+    /** $album: an album the image goes into as it is saved (a story's), so it never shows where that album keeps it out of. */
+    public function saveImage(string $bytes, array $meta, string $key, ?string $album = null): array
     {
         $info = @getimagesizefromstring($bytes);
         if (!$info || !in_array($info['mime'], ['image/png','image/jpeg','image/webp'], true)) throw new \RuntimeException(t('The API returned an invalid image.'));
         $id = bin2hex(random_bytes(16));
-        $this->store($id, ['full'=>$bytes, 'thumb'=>$this->thumbnail($bytes)], array_merge($meta, ['width'=>$info[0], 'height'=>$info[1], 'mime'=>$info['mime']]), $key);
+        $this->store($id, ['full'=>$bytes, 'thumb'=>$this->thumbnail($bytes)], array_merge($meta, ['width'=>$info[0], 'height'=>$info[1], 'mime'=>$info['mime']]), $key, $album);
         return $this->image($id, $key);
     }
 
-    /** Writes the encrypted files of a library item, then its row. Nothing is left behind when a step fails. */
-    private function store(string $id, array $variants, array $meta, string $key): void
+    /**
+     * Writes the encrypted files of a library item, then its row (with the albums it joins). Nothing is left behind when
+     * a step fails.
+     */
+    private function store(string $id, array $variants, array $meta, string $key, ?string $album = null): void
     {
         $paths = [];
         try {
@@ -228,10 +233,22 @@ final class Vault
             }
             // A new version of a hidden image is hidden too, and one of an image in a stack joins that stack.
             $parent = is_string($meta['parent_id'] ?? null) ? $meta['parent_id'] : '';
-            $q = $this->db->prepare('INSERT INTO images(id,meta,created,user_id,hidden,stack) VALUES(?,CAST(? AS BLOB),?,?,
-                COALESCE((SELECT hidden FROM images WHERE id=? AND user_id=?),0),(SELECT stack FROM images WHERE id=? AND user_id=?))');
-            $q->execute([$id, Crypto::seal(json_encode($meta, JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE), $key, "$id:meta"), time(), $this->owner(),
-                $parent, $this->owner(), $parent, $this->owner()]);
+            // It joins its album, and a new version of an image in an album kept out of the library joins that album too, so
+            // the new version doesn't show in the library either: the row and its albums are written together.
+            $own = !$this->db->inTransaction();
+            if ($own) $this->db->exec('BEGIN IMMEDIATE');
+            try {
+                $q = $this->db->prepare('INSERT INTO images(id,meta,created,user_id,hidden,stack) VALUES(?,CAST(? AS BLOB),?,?,
+                    COALESCE((SELECT hidden FROM images WHERE id=? AND user_id=?),0),(SELECT stack FROM images WHERE id=? AND user_id=?))');
+                $q->execute([$id, Crypto::seal(json_encode($meta, JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE), $key, "$id:meta"), time(), $this->owner(),
+                    $parent, $this->owner(), $parent, $this->owner()]);
+                $now = time();
+                if ($album !== null && preg_match('/\A[a-f0-9]{32}\z/D', $album))
+                    $this->db->prepare('INSERT OR IGNORE INTO album_items(album_id,image_id,added) SELECT id, ?, ? FROM albums WHERE id=? AND user_id=?')->execute([$id, $now, $album, $this->owner()]);
+                if ($parent !== '') $this->db->prepare('INSERT OR IGNORE INTO album_items(album_id,image_id,added) SELECT a.id, ?, ? FROM album_items ai JOIN albums a ON a.id=ai.album_id
+                    WHERE ai.image_id=? AND a.user_id=? AND a.library=0')->execute([$id, $now, $parent, $this->owner()]);
+                if ($own) $this->db->exec('COMMIT');
+            } catch (\Throwable $e) { if ($own) $this->db->exec('ROLLBACK'); throw $e; }
         } catch (\Throwable $e) { foreach ($paths as $path) @unlink($path); throw $e; }
     }
 
@@ -620,7 +637,10 @@ final class Vault
      * that item. Favorites and albums are items picked one by one, so there every one of them is listed.
      * `hidden`: false leaves hidden items out (the library), true lists only them (the Ocultas filter), null both (the
      * reference picker and the MCP see every item). The trash lists what is in it, hidden or not.
-     * @param array{search?:string,favorites?:bool,trash?:bool,kind?:?string,origin?:?string,album?:?string,group?:bool,sort?:string,hidden?:?bool} $view
+     * `apart`: false leaves out the items of albums kept out of the library (the pictures of the stories, comics and visual
+     * novels, and the albums the owner set so): the library itself. Their album shows them, and so do the favorites,
+     * the Ocultas filter, the trash, the reference picker and the MCP.
+     * @param array{search?:string,favorites?:bool,trash?:bool,kind?:?string,origin?:?string,album?:?string,group?:bool,sort?:string,hidden?:?bool,apart?:bool} $view
      * @return array{0:list<array>,1:array<string,int>}
      */
     private function view(string $key, array $view): array
@@ -632,9 +652,11 @@ final class Vault
         $search = (string)($view['search'] ?? ''); $trash = !empty($view['trash']); $favorites = !empty($view['favorites']);
         $kind = $view['kind'] ?? null; $origin = $view['origin'] ?? null; $hidden = $trash ? null : ($view['hidden'] ?? null);
         $group = !empty($view['group']) && !$trash && !$favorites && $members === null;
-        $keep = static function (array $it) use ($trash, $favorites, $kind, $origin, $members, $search, $hidden): bool {
+        $apart = ($view['apart'] ?? true) === false && !$trash && !$favorites && $members === null && $hidden !== true ? $this->apart() : [];
+        $keep = static function (array $it) use ($trash, $favorites, $kind, $origin, $members, $search, $hidden, $apart): bool {
             if (($it['deleted'] !== null) !== $trash) return false;
             if ($hidden !== null && $it['hidden'] !== $hidden) return false;
+            if (isset($apart[$it['id']])) return false;
             if ($favorites && !$it['favorite']) return false;
             if ($kind !== null && (($it['kind'] ?? 'image') === 'video' ? 'video' : 'image') !== $kind) return false;
             if ($origin !== null && self::origin($it) !== $origin) return false;
@@ -722,11 +744,11 @@ final class Vault
      * [id, created, width, height, flags, versions, duration]. Flags: 1 favorite, 2 video, 4 imported
      * (from the device or a video frame), 8 video frame, 16 in a stack, 32 hidden. Versions: how many items its pile
      * has. Prompts stay out: tiles ask for theirs as they come into view (captions()). Hidden items stay out of the
-     * library unless the view asks for them (`hidden` true: only those).
+     * library unless the view asks for them (`hidden` true: only those), and so do the items of albums kept out of it.
      */
     public function library(string $key, array $view): array
     {
-        [$matched, $versions] = $this->view($key, $view + ['hidden'=>false]);
+        [$matched, $versions] = $this->view($key, $view + ['hidden'=>false, 'apart'=>false]);
         $rows = [];
         foreach ($matched as $it) {
             $video = ($it['kind'] ?? 'image') === 'video'; $operation = self::operation($it);
@@ -844,9 +866,32 @@ final class Vault
     }
 
     // -----------------------------------------------------------------------------------------------------------------
-    // Albums. An album holds items of one account; its name is encrypted like every other text. Removing an item from
-    // an album, or the album itself, leaves the item in the library. Purging an item takes it out of its albums.
+    // Albums. An album holds items of one account; its name is encrypted like every other text, and so is what made it:
+    // a story (kind "story"), its comic adaptation ("comic") or a visual novel ("vn"), with the story's id. An album can
+    // keep its items out of the library (library 0): they show only in it (and in the favorites, Ocultas, the trash, the
+    // reference picker). The albums of the stories do so from the start; the owner's own albums when the owner says so.
+    // Removing an item from an album, or the album itself, leaves the item in the library (back in it, when no other
+    // album keeps it out). Purging an item takes it out of its albums.
     // -----------------------------------------------------------------------------------------------------------------
+    public const ALBUM_KINDS = ['story', 'comic', 'vn'];
+
+    /** Ids of the items in albums kept out of the library. @return array<string,true> */
+    private function apart(): array
+    {
+        $q = $this->db->prepare('SELECT DISTINCT ai.image_id FROM album_items ai JOIN albums a ON a.id=ai.album_id WHERE a.user_id=? AND a.library=0');
+        $q->execute([$this->owner()]);
+        return array_fill_keys($q->fetchAll(\PDO::FETCH_COLUMN), true);
+    }
+
+    /** Whether the album exists and keeps its items out of the library. */
+    public function keepsApart(string $id): bool
+    {
+        if (!preg_match('/\A[a-f0-9]{32}\z/D', $id)) return false;
+        $q = $this->db->prepare('SELECT library FROM albums WHERE id=? AND user_id=?'); $q->execute([$id, $this->owner()]);
+        $v = $q->fetchColumn(); $q->closeCursor();
+        return $v !== false && (int)$v === 0;
+    }
+
     private function album(string $id): array
     {
         self::validId($id);
@@ -870,33 +915,61 @@ final class Vault
         return $name;
     }
 
-    /** The account's albums by name, each with how many items it shows (not trashed or hidden) and its newest one as cover. */
+    /** An album's sealed details: its name, and what made it (kind and story) for the albums of the stories. */
+    private static function openAlbum(array $r, string $key): array
+    {
+        $meta = json_decode(Crypto::open((string)$r['meta'], $key, 'album:'.$r['id']), true, 16, JSON_THROW_ON_ERROR);
+        $kind = in_array($meta['kind'] ?? null, self::ALBUM_KINDS, true) ? $meta['kind'] : null;
+        return ['name'=>(string)$meta['name'], 'kind'=>$kind, 'story'=>$kind !== null && is_string($meta['story'] ?? null) ? $meta['story'] : null];
+    }
+
+    /**
+     * The account's albums by name, each with how many items it shows (not trashed or hidden), its newest one as cover,
+     * whether its items show in the library, and what made it (kind: story, comic, vn; null for the owner's own) with
+     * the story while it exists.
+     */
     public function albums(string $key): array
     {
-        $q = $this->db->prepare('SELECT a.id, a.meta, a.created,
+        $q = $this->db->prepare('SELECT a.id, a.meta, a.created, a.library,
             (SELECT COUNT(*) FROM album_items ai JOIN images i ON i.id=ai.image_id WHERE ai.album_id=a.id AND i.deleted IS NULL AND i.hidden=0) AS count,
             (SELECT i.id FROM album_items ai JOIN images i ON i.id=ai.image_id WHERE ai.album_id=a.id AND i.deleted IS NULL AND i.hidden=0 ORDER BY i.created DESC, i.rowid DESC LIMIT 1) AS cover
             FROM albums a WHERE a.user_id=?');
         $q->execute([$this->owner()]);
+        $rows = $q->fetchAll();
+        // The story an album was made by, while it exists (a deleted story leaves its album).
+        $q = $this->db->prepare('SELECT id FROM stories WHERE user_id=?'); $q->execute([$this->owner()]);
+        $stories = array_fill_keys($q->fetchAll(\PDO::FETCH_COLUMN), true);
         $albums = [];
-        foreach ($q as $r) {
-            $meta = json_decode(Crypto::open((string)$r['meta'], $key, 'album:'.$r['id']), true, 16, JSON_THROW_ON_ERROR);
-            $albums[] = ['id'=>(string)$r['id'],'name'=>(string)$meta['name'],'count'=>(int)$r['count'],'cover'=>$r['cover'],'created'=>(int)$r['created']];
+        foreach ($rows as $r) {
+            $meta = self::openAlbum($r, $key);
+            $albums[] = ['id'=>(string)$r['id'],'name'=>$meta['name'],'count'=>(int)$r['count'],'cover'=>$r['cover'],'created'=>(int)$r['created'],
+                'library'=>(int)$r['library'] !== 0,'kind'=>$meta['kind'],'story'=>$meta['story'] !== null && isset($stories[$meta['story']]) ? $meta['story'] : null];
         }
         $keys = array_combine(array_column($albums, 'id'), array_map(fn($a) => self::sortKey($a['name']), $albums));
         usort($albums, fn($a, $b) => $keys[$a['id']] <=> $keys[$b['id']]);
         return $albums;
     }
 
-    private function sealAlbum(string $id, string $name, string $key): string
-    { return Crypto::seal(json_encode(['name'=>$name], JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE), $key, "album:$id"); }
+    private function sealAlbum(string $id, array $meta, string $key): string
+    { return Crypto::seal(json_encode($meta, JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE), $key, "album:$id"); }
 
-    public function createAlbum(string $name, string $key): array
+    /**
+     * A new album. $made: what made it, for the album of a story (['kind'=>'story'|'comic'|'vn', 'story'=>id]); such an
+     * album keeps its items out of the library. $library false keeps them out for any album.
+     */
+    public function createAlbum(string $name, string $key, ?array $made = null, ?bool $library = null): array
     {
         $name = self::albumName($name); $id = bin2hex(random_bytes(16));
-        $q = $this->db->prepare('INSERT INTO albums(id,user_id,meta,created) VALUES(?,?,CAST(? AS BLOB),?)');
-        $q->execute([$id, $this->owner(), $this->sealAlbum($id, $name, $key), time()]);
-        return ['id'=>$id,'name'=>$name,'count'=>0,'cover'=>null,'created'=>time()];
+        $meta = ['name'=>$name];
+        if ($made !== null) {
+            if (!in_array($made['kind'] ?? null, self::ALBUM_KINDS, true) || !is_string($made['story'] ?? null)) throw new \LogicException('Invalid album origin.');
+            self::validId($made['story']);
+            $meta += ['kind'=>$made['kind'], 'story'=>$made['story']];
+        }
+        $library ??= $made === null;
+        $q = $this->db->prepare('INSERT INTO albums(id,user_id,meta,created,library) VALUES(?,?,CAST(? AS BLOB),?,?)');
+        $q->execute([$id, $this->owner(), $this->sealAlbum($id, $meta, $key), time(), $library ? 1 : 0]);
+        return ['id'=>$id,'name'=>$name,'count'=>0,'cover'=>null,'created'=>time(),'library'=>$library,'kind'=>$meta['kind'] ?? null,'story'=>$meta['story'] ?? null];
     }
 
     public function hasAlbum(string $id): bool
@@ -904,10 +977,77 @@ final class Vault
         try { $this->album($id); return true; } catch (HttpError) { return false; }
     }
 
+    /** What made an album (kind and story, null for the owner's own), or null when it doesn't exist. */
+    public function albumOrigin(string $id, string $key): ?array
+    {
+        try { $meta = self::openAlbum($this->album($id), $key); } catch (HttpError) { return null; }
+        return ['kind'=>$meta['kind'], 'story'=>$meta['story']];
+    }
+
     public function renameAlbum(string $id, string $name, string $key): void
     {
-        $this->album($id); $name = self::albumName($name);
-        $this->db->prepare('UPDATE albums SET meta=CAST(? AS BLOB) WHERE id=? AND user_id=?')->execute([$this->sealAlbum($id, $name, $key), $id, $this->owner()]);
+        $meta = self::openAlbum($this->album($id), $key); $name = self::albumName($name);
+        $meta = ['name'=>$name] + ($meta['kind'] !== null ? ['kind'=>$meta['kind'], 'story'=>$meta['story']] : []);
+        $this->db->prepare('UPDATE albums SET meta=CAST(? AS BLOB) WHERE id=? AND user_id=?')->execute([$this->sealAlbum($id, $meta, $key), $id, $this->owner()]);
+    }
+
+    /** An album a story made before albums knew it (adoptAlbums in Stories): it now says so, and keeps its items out of the library. */
+    public function adoptAlbum(string $id, array $made, string $key): void
+    {
+        $meta = self::openAlbum($this->album($id), $key);
+        if (!in_array($made['kind'] ?? null, self::ALBUM_KINDS, true) || !is_string($made['story'] ?? null)) throw new \LogicException('Invalid album origin.');
+        self::validId($made['story']);
+        $this->db->prepare('UPDATE albums SET meta=CAST(? AS BLOB), library=0 WHERE id=? AND user_id=?')
+            ->execute([$this->sealAlbum($id, ['name'=>$meta['name'], 'kind'=>$made['kind'], 'story'=>$made['story']], $key), $id, $this->owner()]);
+    }
+
+    /** Whether the album's items show in the library (true) or only in the album (false). */
+    public function setAlbumLibrary(string $id, bool $library): void
+    {
+        $this->album($id);
+        $this->db->prepare('UPDATE albums SET library=? WHERE id=? AND user_id=?')->execute([$library ? 1 : 0, $id, $this->owner()]);
+    }
+
+    /**
+     * When each item joined an album, by id: what adoptAlbums (Stories) needs to tell the pictures gathered when the
+     * album was made from the ones made for it. @return array<string,int>
+     */
+    public function albumAdded(string $id): array
+    {
+        $this->album($id);
+        $q = $this->db->prepare('SELECT image_id, added FROM album_items WHERE album_id=?'); $q->execute([$id]);
+        return array_map('intval', array_column($q->fetchAll(), 'added', 'image_id'));
+    }
+
+    /**
+     * The ones of $ids made for a story: by a request that sent its images into an album (every picture of a story,
+     * comic or visual novel goes into the story's album), as opposed to pictures of the library a story uses.
+     * @return array<string,true>
+     */
+    public function madeForAlbums(array $ids, string $key): array
+    {
+        $out = [];
+        foreach (array_chunk(self::idList($ids), 200) as $chunk) {
+            $q = $this->db->prepare('SELECT * FROM images WHERE user_id=? AND id IN ('.implode(',', array_fill(0, count($chunk), '?')).')');
+            $q->execute([$this->owner(), ...$chunk]);
+            $jobs = [];
+            foreach ($q->fetchAll() as $r) { $job = $this->decode($r, $key)['job_id'] ?? null; if (is_string($job) && preg_match('/\A[a-f0-9]{32}\z/D', $job)) $jobs[$job][] = (string)$r['id']; }
+            if (!$jobs) continue;
+            $q = $this->db->prepare('SELECT id, payload FROM jobs WHERE user_id=? AND id IN ('.implode(',', array_fill(0, count($jobs), '?')).')');
+            $q->execute([$this->owner(), ...array_keys($jobs)]);
+            foreach ($q->fetchAll() as $r) {
+                try { $p = json_decode(Crypto::open((string)$r['payload'], $key, 'job:'.$r['id']), true, 512, JSON_THROW_ON_ERROR); }
+                catch (\Throwable) { continue; }
+                if (is_string($p['album'] ?? null)) foreach ($jobs[$r['id']] as $id) $out[$id] = true;
+            }
+        }
+        return $out;
+    }
+
+    /** When an album was made, or null. */
+    public function albumCreated(string $id): ?int
+    {
+        try { return (int)$this->album($id)['created']; } catch (HttpError) { return null; }
     }
 
     public function deleteAlbum(string $id): void

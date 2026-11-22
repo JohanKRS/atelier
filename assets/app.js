@@ -276,6 +276,8 @@ $$('[data-close]').forEach(b => b.addEventListener('click', () => document.getEl
 // Stories (stories.js): the writer's section, with what it shares of this page.
 const stories = createStories({ api, h, icon, toast, confirmAction, imageUrl, openViewer, trackJob, launchQueued, formatUsd, dateTime, plural, newId, story: storyHelpers, reader: readerModule, createComics, createVn, $,
   openHistory: story => openHistory({ story }),
+  // The album of a story, its comic or a visual novel, open in the library (showAlbum is declared further down).
+  openAlbum: id => showAlbum(id),
   // A story opened from the other section (the history, an address) takes the section of its kind with it.
   kindChanged: kind => { const section = kind === 'vn' ? 'vn' : 'stories'; if (state.section !== section) setSection(section, { remember: false }); },
   models: () => state.models, prefs: () => state.prefs, savePrefs, hasKey: () => state.has_key, hasClaudeKey: () => state.has_claude_key, hasGeminiKey: () => state.has_gemini_key,
@@ -1526,8 +1528,10 @@ function feedEntries() {
   if (plain && ['all', 'video'].includes(g.origin)) {
     for (const upload of [...state.uploads.values()].sort((a, b) => b.created - a.created)) { const tile = uploadTile(upload); if (tile) entries.push({ el: tile, group: pending }); }
   }
-  if (plain && ['all', 'generated'].includes(g.origin)) {
-    for (const job of [...state.jobs.values()].sort((a, b) => b.created - a.created)) for (const tile of jobTiles(job)) entries.push({ el: tile, group: pending });
+  // A request shows where its images go: in the library, or in the album that keeps them out of it (a story's).
+  const here = plain ? job => !job.apart : g.album && !g.trash && !g.favorites && !g.search ? job => job.album === g.album.id : null;
+  if (here && ['all', 'generated'].includes(g.origin)) {
+    for (const job of [...state.jobs.values()].sort((a, b) => b.created - a.created)) if (here(job)) for (const tile of jobTiles(job)) entries.push({ el: tile, group: pending });
   }
   layout.special = entries.length;
   const dated = datedSort();
@@ -1579,6 +1583,9 @@ function renderFeed() {
   if (empty) {
     const content = g.search ? [t('Nothing found'), t('No prompt contains “{search}”.', { search: snippet(g.search, 40) })]
       : g.trash ? [t('The trash is empty'), '']
+        : g.album?.kind ? [t('Empty album'), g.album.kind === 'comic' ? t('The pages and sheets of the comic adaptation come here as they are drawn.')
+          : g.album.kind === 'vn' ? t('The sprites, backgrounds, CGs, covers and sheets of the visual novel come here as they are made.')
+            : t('The covers, illustrations and sheets of the story come here as they are made.')]
         : g.album ? [t('Empty album'), t('Select items from the library and use “Add to album”. Importing with the album open also adds to it.')]
           : g.origin === 'hidden' ? [t('Nothing hidden'), t('Use “Hide” on an image, or on a selection of several items, to take it out of the library without deleting it. It stays only here, and the reference picker still shows it.')]
           : g.favorites ? [t('No favorites'), t('Use an image\'s star to keep it here.')]
@@ -2364,7 +2371,7 @@ function renderToolbar() {
   $('#origin-filter').hidden = g.trash;
   $('#favorites-only').setAttribute('aria-pressed', String(g.favorites));
   $('#favorites-only').hidden = g.trash;
-  $('#scope-button').replaceChildren(icon(g.trash ? 'trash' : g.album ? 'album' : 'gallery'), h('span', { id: 'scope-label' }, g.trash ? t('Trash') : g.album ? g.album.name : t('Library')), icon('chevronDown'));
+  $('#scope-button').replaceChildren(icon(g.trash ? 'trash' : g.album ? ALBUM_ICON[g.album.kind] || 'album' : 'gallery'), h('span', { id: 'scope-label' }, g.trash ? t('Trash') : g.album ? g.album.name : t('Library')), icon('chevronDown'));
   $('#scope-button').classList.toggle('active', g.trash || !!g.album);
   setText($('#sort-label'), SORT_LABEL[g.sort]);
   $('#view-button').title = grouped() ? t('Order: {sort}, versions and stacks grouped', { sort: SORT_LABEL[g.sort] }) : t('Order: {sort}', { sort: SORT_LABEL[g.sort] });
@@ -2392,11 +2399,13 @@ for (const [menu, button] of [[$('#scope-menu'), $('#scope-button')], [$('#view-
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(at + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus(); }
   });
 }
-function menuItem(label, { checked, onclick, iconName, thumb, count, danger, role = 'menuitem' } = {}) {
-  const art = thumb !== undefined ? (thumb ? h('img', { class: 'menu-thumb', alt: '', src: imageUrl(thumb, true) }) : h('span', { class: 'menu-thumb blank' }, icon('album')))
+/** note: [icon, what it means], a small mark before the count (an album kept out of the library). */
+function menuItem(label, { checked, onclick, iconName, thumb, thumbIcon = 'album', count, danger, note, role = 'menuitem' } = {}) {
+  const art = thumb !== undefined ? (thumb ? h('img', { class: 'menu-thumb', alt: '', src: imageUrl(thumb, true) }) : h('span', { class: 'menu-thumb blank' }, icon(thumbIcon)))
     : iconName ? icon(iconName) : h('span', { class: 'menu-check' }, icon('check'));
   const button = h('button', { type: 'button', class: `menu-item${danger ? ' danger' : ''}`, role: checked === undefined || role !== 'menuitem' ? role : 'menuitemradio', 'aria-checked': checked === undefined ? null : String(checked) },
-    art, h('span', { class: 'menu-label' }, label), count !== undefined ? h('span', { class: 'menu-count' }, number(count)) : '');
+    art, h('span', { class: 'menu-label' }, label), note ? h('span', { class: 'menu-note', title: note[1], 'aria-label': note[1] }, icon(note[0])) : '',
+    count !== undefined ? h('span', { class: 'menu-count' }, number(count)) : '');
   button.onclick = () => { button.closest('[popover]').hidePopover(); onclick(); };
   return button;
 }
@@ -2413,12 +2422,22 @@ $('#scope-button').onclick = async () => {
   if (menu.matches(':popover-open')) { menu.hidePopover(); return; }
   if (!state.albums) await refreshAlbums().catch(() => {});
   const albums = state.albums || [];
+  // The person's own albums, then the albums the stories, comics and visual novels made (each with all its pictures,
+  // which stay out of the library). A mark tells an album that does otherwise than its kind usually does.
+  const item = album => menuItem(album.name, { checked: g.album?.id === album.id, thumb: album.cover, thumbIcon: ALBUM_ICON[album.kind] || 'album', count: album.count,
+    note: !album.kind && !album.library ? ['eyeOff', t('Its items don\'t show in the library')] : album.kind && album.library ? ['eye', t('Its items show in the library too')] : null,
+    onclick: () => openScope({ album }) });
+  const made = ALBUM_KINDS.flatMap(([kind, title]) => { const list = albums.filter(a => a.kind === kind); return list.length ? [menuSeparator(), menuTitle(title), ...list.map(item)] : []; });
   openMenu(menu, button, [
     menuItem(t('Library'), { checked: !g.trash && !g.album, onclick: () => openScope({}) }),
     menuSeparator(), menuTitle(t('Albums')),
-    ...albums.map(album => menuItem(album.name, { checked: g.album?.id === album.id, thumb: album.cover, count: album.count, onclick: () => openScope({ album }) })),
+    ...albums.filter(a => !a.kind).map(item),
     menuItem(t('New album…'), { iconName: 'plus', onclick: () => createAlbum() }),
-    ...(g.album ? [menuSeparator(), menuItem(t('Rename album…'), { iconName: 'pencil', onclick: () => renameAlbum(g.album) }),
+    ...made,
+    ...(g.album ? [menuSeparator(),
+      menuItem(t('Show in the library'), { role: 'menuitemcheckbox', checked: g.album.library, onclick: () => setAlbumLibrary(g.album, !g.album.library) }),
+      ...(g.album.story ? [menuItem(g.album.kind === 'vn' ? t('Open the visual novel') : t('Open the story'), { iconName: ALBUM_ICON[g.album.kind], onclick: () => openStoryFromHistory(g.album.story) })] : []),
+      menuItem(t('Rename album…'), { iconName: 'pencil', onclick: () => renameAlbum(g.album) }),
       menuItem(t('Delete album…'), { iconName: 'trash', danger: true, onclick: () => deleteAlbum(g.album) })] : []),
     menuSeparator(),
     menuItem(t('Trash'), { checked: g.trash, onclick: () => openScope({ trash: true }) }),
@@ -2438,6 +2457,27 @@ $('#view-button').onclick = () => {
 // ---------------------------------------------------------------------------
 // Albums
 // ---------------------------------------------------------------------------
+/** The albums the stories made, by kind, in the order the menus list them, and the icon of each kind. */
+const ALBUM_KINDS = [['story', t('Stories')], ['comic', t('Comics and manga')], ['vn', t('Visual novels')]];
+const ALBUM_ICON = { story: 'book', comic: 'comic', vn: 'dialogue' };
+/** Whether an album's items show in the library too, or only in the album. */
+async function setAlbumLibrary(album, library) {
+  try {
+    await api('album-library', { id: album.id, library });
+    await refreshAlbums();
+    toast(library ? t('The items of {album} show in the library too.', { album: album.name }) : t('The items of {album} now show only in the album, not in the library.', { album: album.name }));
+  } catch (e) { toast(e.message, { tone: 'error' }); }
+}
+/** An album opened from a story, its comic or a visual novel: back to the images, with the album open. */
+async function showAlbum(id) {
+  const albums = await refreshAlbums().catch(() => state.albums || []);
+  const album = albums.find(a => a.id === id);
+  if (!album) { toast(t('The album is no longer there. The next picture made for the story makes it again.'), { tone: 'error' }); return; }
+  // As the Images button does: the entries the stories made are walked back.
+  const depth = history.state?.atelier ? Number(history.state.depth) || 0 : 0;
+  if (WRITING[state.section] && depth > 0 && writingHash(location.hash)) history.go(-depth); else if (state.section !== 'images') setSection('images');
+  openScope({ album });
+}
 async function refreshAlbums() {
   const { albums } = await api('albums');
   state.albums = albums;
@@ -2478,7 +2518,10 @@ async function renameAlbum(album) {
   catch (e) { toast(e.message, { tone: 'error' }); }
 }
 async function deleteAlbum(album) {
-  if (!await confirmAction({ title: t('Delete the album {name}?', { name: album.name }), message: t('Only the album is deleted. Its images and videos stay in the library.'), confirm: t('Delete album'), danger: true })) return;
+  const message = album.library ? t('Only the album is deleted. Its images and videos stay in the library.')
+    : album.kind ? t('Only the album is deleted. Its images and videos go back to the library. The next picture made for the story makes a new album, with only what comes next.')
+      : t('Only the album is deleted. Its images and videos go back to the library.');
+  if (!await confirmAction({ title: t('Delete the album {name}?', { name: album.name }), message, confirm: t('Delete album'), danger: true })) return;
   try { await api('album-delete', { id: album.id }); await refreshAlbums(); openScope({}); toast(t('Album deleted.')); }
   catch (e) { toast(e.message, { tone: 'error' }); }
 }
@@ -2496,10 +2539,13 @@ async function openAlbumDialog(ids) {
       dialog.close();
       if (selection.active) setSelecting(false);
       await refreshAlbums();
-      toast(count ? plural(count, t('{n} item added to {album}.', { album: album.name }), t('{n} items added to {album}.', { album: album.name }))
+      // Into an album that keeps its items out of the library, they leave the library.
+      const away = !album.library && count > 0;
+      toast(count ? (away ? plural(count, t('{n} item moved to {album}: it now shows only there.', { album: album.name }), t('{n} items moved to {album}: they now show only there.', { album: album.name }))
+        : plural(count, t('{n} item added to {album}.', { album: album.name }), t('{n} items added to {album}.', { album: album.name })))
         : ids.length === 1 ? t('It was already in {album}.', { album: album.name }) : t('They were already in {album}.', { album: album.name }),
         { action: state.gallery.album?.id === album.id ? undefined : { label: t('Open'), run: () => openScope({ album: state.albums.find(a => a.id === album.id) || album }) } });
-      if (state.gallery.album?.id === album.id) loadGallery();
+      if (state.gallery.album?.id === album.id || away) loadGallery();
     } catch (e) { toast(e.message, { tone: 'error' }); }
   };
   $('#album-new').onsubmit = async e => {
@@ -2511,9 +2557,15 @@ async function openAlbumDialog(ids) {
   };
   try {
     const albums = await refreshAlbums();
-    list.replaceChildren(...(albums.length ? albums.map(album => h('button', { type: 'button', class: 'album-option', onclick: () => add(album) },
-      album.cover ? h('img', { alt: '', src: imageUrl(album.cover, true) }) : h('span', { class: 'album-cover' }, icon('album')),
-      h('span', { class: 'album-name' }, album.name), h('span', { class: 'muted' }, plural(album.count, t('{n} item'), t('{n} items')))))
+    const option = album => h('button', { type: 'button', class: 'album-option', onclick: () => add(album) },
+      album.cover ? h('img', { alt: '', src: imageUrl(album.cover, true) }) : h('span', { class: 'album-cover' }, icon(ALBUM_ICON[album.kind] || 'album')),
+      h('span', { class: 'album-name' }, album.name),
+      h('span', { class: 'muted album-count' },
+        album.library ? null : h('span', { class: 'album-apart', title: t('Its items don\'t show in the library'), 'aria-label': t('Its items don\'t show in the library') }, icon('eyeOff')),
+        plural(album.count, t('{n} item'), t('{n} items'))));
+    // The person's own albums first, then the stories', each kind under its name.
+    const made = ALBUM_KINDS.flatMap(([kind, title]) => { const of = albums.filter(a => a.kind === kind); return of.length ? [h('h3', { class: 'album-group', text: title }), ...of.map(option)] : []; });
+    list.replaceChildren(...(albums.length ? [...albums.filter(a => !a.kind).map(option), ...made]
       : [h('p', { class: 'hint' }, t('No albums yet. Give a name below to create the first one.'))]));
     (albums.length ? $('.album-option', list) : $('#album-name')).focus();
   } catch (e) { list.replaceChildren(h('p', { class: 'error' }, e.message)); }

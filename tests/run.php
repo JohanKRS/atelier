@@ -701,6 +701,32 @@ try{
   check($vault->hide([$tall],true,true,$key)===0&&$vault->unstack([$tall],true,$key)===0,'hiding and stacks ignore items of other accounts');
   rejects(fn()=>$vault->stack([$tall,$small],$key),'items of other accounts cannot be stacked');
   $vault->reorder([$tall],null);$vault->useOwner($lib['id']);check($ids(['sort'=>'custom'])===[$newest,$tall,$small]&&$ids([])===[$newest,$tall,$small],'reordering ignores items of other accounts');
+  // An album can keep its items out of the library: they show only in it (and in the favorites, Ocultas, the trash and
+  // the reference picker). The owner's own albums show them until the owner says otherwise.
+  $apartAlbum=$vault->createAlbum('Só no álbum',$libKey);$vault->bulk('album-add',[$tall],$apartAlbum['id']);
+  check($apartAlbum['library']===true&&$apartAlbum['kind']===null&&$ids([])===[$newest,$tall,$small],'an album of the owner shows its items in the library too');
+  $vault->setAlbumLibrary($apartAlbum['id'],false);$row=array_values(array_filter($vault->albums($libKey),fn($a)=>$a['id']===$apartAlbum['id']))[0];
+  check($row['library']===false&&$row['count']===1&&$ids([])===[$newest,$small]&&$ids(['group'=>true])===[$newest,$small]&&$ids(['origin'=>'imported'])===[$small]&&$ids(['album'=>$apartAlbum['id']])===[$tall],'kept out of the library, its items show only in the album');
+  check($vault->gallery($libKey,'',false,false,0,300)['total']===3&&$ids(['search'=>'água'])===[],'the reference picker still lists them; the library\'s search doesn\'t');
+  $vault->bulk('favorite',[$tall]);check($ids(['favorites'=>true])===[$tall],'the favorites list them');$vault->bulk('unfavorite',[$tall]);
+  $vault->hide([$tall],true,false,$libKey);check($ids(['hidden'=>true])===[$tall],'and so does Ocultas, when hidden');$vault->hide([$tall],false,false,$libKey);
+  $tall2=$editOf($tall,'água 2',$t+30);
+  check($ids(['album'=>$apartAlbum['id']])===[$tall2,$tall]&&$ids([])===[$newest,$small]&&$ids(['group'=>true])===[$newest,$small],'a new version of an image kept out of the library joins its album, so it stays out too');
+  $shown=$vault->createAlbum('Na biblioteca',$libKey);$vault->bulk('album-add',[$small],$shown['id']);$small2=$editOf($small,'barco 9b',$t+31);
+  check($ids(['album'=>$shown['id']])===[$small]&&$ids([])===[$small2,$newest,$small],'a new version of an image in an album that shows its items stays only in the library, as before');
+  $vault->bulk('album-add',[$small],$apartAlbum['id']);
+  check($ids([])===[$small2,$newest]&&$ids(['group'=>true])===[$small2,$newest],'an item kept out by one album stays out even when another album shows it; its version from the library still shows');
+  $vault->bulk('album-remove',[$small],$apartAlbum['id']);
+  $vault->setAlbumLibrary($apartAlbum['id'],true);check($ids([])===[$small2,$tall2,$newest,$tall,$small],'shown again, its items are back in the library');
+  $vault->setAlbumLibrary($apartAlbum['id'],false);$vault->deleteAlbum($apartAlbum['id']);$vault->deleteAlbum($shown['id']);
+  check($ids([])===[$small2,$tall2,$newest,$tall,$small],'deleting an album that kept its items out brings them back to the library');
+  $vault->bulk('trash',[$small2,$tall2]);$vault->bulk('purge',[$small2,$tall2]);
+  $made=$vault->createAlbum('História',$libKey,['kind'=>'story','story'=>str_repeat('5',32)]);
+  check($made['library']===false&&$made['kind']==='story'&&!str_contains((string)$vault->db->query("SELECT meta FROM albums WHERE id='{$made['id']}'")->fetchColumn(),'story')
+    &&array_values(array_filter($vault->albums($libKey),fn($a)=>$a['id']===$made['id']))[0]['story']===null,'an album a story made keeps its items out of the library from the start, says what made it (sealed), and no story while the story is gone');
+  $vault->renameAlbum($made['id'],'História 2',$libKey);check($vault->albumOrigin($made['id'],$libKey)['kind']==='story','renaming keeps what made it');
+  $vault->deleteAlbum($made['id']);
+  $vault->useOwner($owner['id']);rejects(fn()=>$vault->setAlbumLibrary($album['id'],false),'the albums of another account cannot be changed');$vault->useOwner($lib['id']);
   $vault->deleteAlbum($album['id']);check($vault->albums($libKey)===[]&&$vault->image($tall,$libKey)['id']===$tall,'deleting an album keeps its items');
   $second=$vault->createAlbum('Outro',$libKey);$vault->bulk('album-add',[$tall],$second['id']);
   $users->delete($lib['id']);

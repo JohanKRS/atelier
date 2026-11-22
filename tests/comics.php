@@ -208,6 +208,15 @@ try{
     $jobs->run(end($ctx->jobs),$key,$api); $stories->get($sid,$key,$jobs);
     $fixed=$comics->pageAt($sid,1,$key)['image'];
     check($fixed!==$page1['image']&&$vault->image($fixed,$key)['parent_id']===$page1['image'],'the new version takes the page\'s place, as a version of it');
+    // The adaptation has an album of its own, out of the library: its pages (and their versions) go there, not to the story's.
+    $albums=$stories->get($sid,$key)['albums']; $listed=array_column($vault->albums($key),null,'id');
+    $inAlbum=fn(?string $album)=>$album===null?[]:array_column($vault->library($key,['album'=>$album])['items'],0);
+    check($albums['comic']!==null&&$listed[$albums['comic']]['kind']==='comic'&&$listed[$albums['comic']]['story']===$sid&&$listed[$albums['comic']]['library']===false&&$listed[$albums['comic']]['name']==='O Farol (mangá)'
+        &&!array_diff([$page1['image'],$fixed],$inAlbum($albums['comic']))&&!array_intersect([$page1['image'],$fixed],$inAlbum($albums['book']))&&!array_intersect([$page1['image'],$fixed],array_column($vault->library($key,[])['items'],0)),'the pages and their versions go into the adaptation\'s own album, named for its kind, out of the library and of the story\'s album');
+    check(!array_intersect(array_values($lib),$inAlbum($albums['comic']))&&!array_diff(array_values($lib),array_column($vault->library($key,[])['items'],0)),'the library pictures its sheets use stay in the library');
+    $comics->setSettings($sid,['kind'=>'graphic_novel'],'person',$key);
+    check(array_column($vault->albums($key),'name','id')[$albums['comic']]==='O Farol (graphic novel)','the album says the adaptation\'s new kind');
+    $comics->setSettings($sid,['kind'=>'manga'],'person',$key);
     [$ok,$out]=$wi->runTool('read_comic',['pages'=>[2]],$ctx);
     check($ok&&str_contains($out,'Comic adaptation: manga, black and white, read right to left, pages 2:3 at 2× the usual size.')&&str_contains($out,'Page 1 (chapter 1): Ana chega ao farol, de noite. — 2 panels; drawn: image '.$fixed)
         &&str_contains($out,'Page 2 (chapter 1): Bruno e Ana no alto do farol. — 2 panels; being drawn')&&str_contains($out,'Page 2 (adapts chapter 1), revision'),'read_comic shows every page and the scripts asked for');

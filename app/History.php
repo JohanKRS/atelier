@@ -31,7 +31,7 @@ final class History
         $story = (string)($query['story'] ?? '');
         if ($story !== '') { Vault::validId($story); if (!isset($titles[$story])) throw new HttpError(404, t('Story not found.')); }
         $albums = [];
-        foreach ($titles as $id => $t) if ($t['album'] !== null) $albums[$t['album']] = $id;
+        foreach ($titles as $id => $t) foreach ($t['albums'] as $album) $albums[$album] = $id;
         [$jobsAt, $messagesAt] = self::cursor((string)($query['cursor'] ?? ''));
         if ($kind === 'writer') $jobsAt = false;
         if ($kind === 'images') $messagesAt = false;
@@ -48,7 +48,7 @@ final class History
             if ($fromJobs) {
                 $next = array_shift($jobs); $jobsAt = $next['at'];
                 $job = $this->jobs->entry($next['id'], $key); if ($job === null) continue;
-                $of = $job['album'] !== null ? ($albums[$job['album']] ?? null) : null; unset($job['album']);
+                $of = $job['album'] !== null ? ($albums[$job['album']] ?? null) : null; unset($job['album'], $job['apart']);
                 if ($story !== '' && $of !== $story) continue;
                 $item = ['type'=>'image'] + $job + ['story'=>$of !== null ? ['id'=>$of, 'title'=>$titles[$of]['title']] : null];
                 if ($search !== '' && !self::matches($search, [$job['prompt'], (string)($job['label'] ?? ''), $of !== null ? $titles[$of]['title'] : ''])) continue;

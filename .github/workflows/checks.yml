@@ -57,6 +57,7 @@ jobs:
           php tests/gemini.php
           php tests/catalog.php
           php tests/vn.php
+          php tests/albums.php
           php tests/i18n.php
       - name: Installation regression checks
         run: |

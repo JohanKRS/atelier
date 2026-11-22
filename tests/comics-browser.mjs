@@ -289,6 +289,25 @@ await shot('comics-phone.png');
 await page.locator('#comic-dialog [data-close=comic-dialog]').click();
 pass('the window fits a phone');
 
+// The adaptation's album: its button in the window opens it, under Quadrinhos e mangás, and its pictures stay out of the library
+await page.setViewportSize({ width: 1440, height: 900 });
+await page.locator('#side-comic').click();
+await page.locator('#comic-album').click();
+await page.locator('.workspace').waitFor();
+await page.waitForFunction(() => document.querySelectorAll('#feed .tile[data-id]').length > 0 && location.hash === '', null, { timeout: 10000 });
+assert.match(await page.locator('#scope-button').textContent(), /O Farol em Quadrinhos \((mangá|HQ|graphic novel)\)/);
+const comicPictures = await page.locator('#feed .tile[data-id]').evaluateAll(tiles => tiles.map(t => t.dataset.id));
+const library = await page.evaluate(async () => (await (await fetch('index.php?action=library&group=0&sort=newest', { cache: 'no-store' })).json()).items.map(r => r[0]));
+assert.deepEqual(library.filter(id => comicPictures.includes(id)), [], 'the pages are not in the library');
+await page.locator('#scope-button').click();
+assert.ok(await page.locator('#scope-menu .menu-item[aria-checked=true]').first().evaluate(item => {
+  const titles = [...item.parentElement.querySelectorAll('.menu-title')].filter(x => x.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING);
+  return titles.at(-1)?.textContent === 'Quadrinhos e mangás';
+}), 'the adaptation\'s album under its kind');
+await shot('comics-album-menu.png');
+await page.keyboard.press('Escape');
+pass('the adaptation\'s album opens from its window, under Quadrinhos e mangás, out of the library');
+
 assert.deepEqual(errors, []);
 await browser.close();
 console.log('comic browser checks passed');

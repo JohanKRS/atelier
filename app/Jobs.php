@@ -221,7 +221,8 @@ final class Jobs
 
     /** Queue a new request with the same inputs as an earlier one (references included). */
     /** @return list<array> one job per requested image */
-    public function retry(string $id, string $from, mixed $n, string $key): array
+    /** $album: the album the new images go into instead of the first request's (a comic page asked before the comic had one). */
+    public function retry(string $id, string $from, mixed $n, string $key, ?string $album = null): array
     {
         Vault::validId($id); Vault::validId($from);
         $source = $this->find($from, $key); if (!$source) throw new HttpError(404, t('Request not found.'));
@@ -235,6 +236,7 @@ final class Jobs
             try { $this->vault->image((string)$p['parent_id'], $key, true); } catch (HttpError) { $p['parent_id'] = null; $p['operation'] = 'generate'; }
         }
         $p['image_ids'] = []; $p['error'] = null; $p['variation_usage'] = null; unset($p['dismissed'], $p['error_kind']);
+        if ($album !== null) { Vault::validId($album); $p['album'] = $album; }
         return $this->insertEach($id, $p, $key);
     }
 
@@ -336,14 +338,20 @@ final class Jobs
     private function publicJob(array $r): array
     {
         $p = $r['payload'];
+        // The album its images go into, and whether that album keeps them out of the library: then the library doesn't
+        // show the request either, the album does.
+        $album = is_string($p['album'] ?? null) ? $p['album'] : null;
         return ['id'=>$r['id'],'status'=>$r['status'],'phase'=>$r['phase'] ?? null,'created'=>(int)$r['created'],'updated'=>(int)$r['updated'],
             'prompt'=>$p['prompt'],'label'=>$p['label'] ?? null,'options'=>$p['options'],'image_ids'=>$p['image_ids'],'error'=>self::errorFor($r),'error_kind'=>$p['error_kind'] ?? null,
             'reference_count'=>(int)($p['reference_count'] ?? count($p['references'] ?? [])),'has_mask'=>!empty($p['has_mask'] ?? $p['mask'] ?? null),'parent_ids'=>$p['parent_ids'] ?? [],
             'parent_id'=>$p['parent_id'] ?? null,'operation'=>$p['operation'] ?? (empty($p['parent_ids']) ? 'generate' : 'edit'),
             'dismissed'=>!empty($p['dismissed']),'previews'=>(int)($r['preview'] ?? 0),
             'variation'=>self::variationInfo($p),'watched'=>!empty($r['worker_lock']),'cleaned'=>self::cleanedOf($p),
-            'typed'=>is_string($p['typed'] ?? null) ? $p['typed'] : null];
+            'typed'=>is_string($p['typed'] ?? null) ? $p['typed'] : null]
+            + ['album'=>$album, 'apart'=>$album !== null && ($this->apart[$album] ??= $this->vault->keepsApart($album))];
     }
+    /** Album id => whether it keeps its items out of the library, as read in this process. */
+    private array $apart = [];
 
     private static function errorFor(array $r): ?string
     {
@@ -519,7 +527,7 @@ final class Jobs
     public function entry(string $id, string $key): ?array
     {
         $job = $this->find($id, $key); if (!$job) return null;
-        return $this->publicJob($job) + ['album'=>is_string($job['payload']['album'] ?? null) ? $job['payload']['album'] : null];
+        return $this->publicJob($job);
     }
 
     /** Before any listing: requests whose process is gone are marked. */
@@ -659,9 +667,9 @@ final class Jobs
                     'planning_skipped'=>$result['planning_skipped'] ?? null,'options'=>$p['options'],'parent_ids'=>$p['parent_ids'],'parent_id'=>$p['parent_id'] ?? null,'operation'=>$p['operation'] ?? 'generate',
                     'label'=>$p['label'] ?? null,'job_id'=>$id,'usage'=>$result['usage'],'planning_usage'=>$result['planning_usage'],
                     'variation'=>self::variationInfo($p),'variation_usage'=>$p['variation_usage'] ?? null,'cleaned'=>self::cleanedOf($p)]
-                    + (is_string($p['typed'] ?? null) ? ['typed'=>$p['typed']] : []), $key);
+                    + (is_string($p['typed'] ?? null) ? ['typed'=>$p['typed']] : []), $key, is_string($p['album'] ?? null) ? $p['album'] : null);
+                // It went into its album as it was saved (unless the album was deleted meanwhile).
                 $p['image_ids'][] = $item['id'];
-                if (isset($p['album'])) { try { $this->vault->bulk('album-add', [$item['id']], $p['album']); } catch (HttpError) { /* the album was deleted meanwhile */ } }
                 // Checkpoint every output so a partial disk failure doesn't lose completed image IDs.
                 $this->savePayload($id, $p, $key);
             }

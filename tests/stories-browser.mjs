@@ -656,11 +656,42 @@ await page.locator('#story-cover-dialog [data-close=story-cover-dialog]').click(
 await page.locator('.section-switch [data-section=images]').click();
 await page.locator('.workspace').waitFor();
 assert.equal(new URL(page.url()).hash, '');
-// The illustrations are in the library, in the story's album
+// The illustrations are in the story's album, under Histórias in the menu, and out of the library
 await page.locator('#scope-button').click();
+assert.ok(await page.locator('#scope-menu .menu-item', { hasText: 'Nova história' }).evaluate(item => {
+  const titles = [...item.parentElement.querySelectorAll('.menu-title')].filter(x => x.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING);
+  return titles.at(-1)?.textContent === 'Histórias';
+}), 'the story\'s album under its kind');
 await page.locator('#scope-menu .menu-item', { hasText: 'Nova história' }).click();
 // The illustration and its photographic version, the three covers made from the page and a new version of one, the lettering sample
 await page.waitForFunction(() => document.querySelectorAll('#feed .tile[data-id]').length === 7, null, { timeout: 10000 });
+const inLibrary = () => page.evaluate(async () => (await (await fetch('index.php?action=library&group=0&sort=newest', { cache: 'no-store' })).json()).items.map(r => r[0]));
+const storyPictures = await page.locator('#feed .tile[data-id]').evaluateAll(tiles => tiles.map(t => t.dataset.id));
+assert.deepEqual((await inLibrary()).filter(id => storyPictures.includes(id)), [], 'the story\'s pictures are not in the library');
+// "Mostrar na biblioteca" brings them into the library, and takes them out again
+await page.locator('#scope-button').click();
+const showToggle = page.locator('#scope-menu .menu-item[role=menuitemcheckbox]', { hasText: 'Mostrar na biblioteca' });
+assert.equal(await showToggle.getAttribute('aria-checked'), 'false');
+await shot('stories-album-menu.png');
+await showToggle.click();
+await toastSays('Os itens de Nova história aparecem também na biblioteca.');
+assert.equal((await inLibrary()).filter(id => storyPictures.includes(id)).length, 7, 'shown in the library, they are all there');
+await page.locator('#scope-button').click();
+assert.equal(await showToggle.getAttribute('aria-checked'), 'true');
+assert.equal(await page.locator('#scope-menu .menu-item[aria-checked=true] .menu-note').count(), 1, 'the album is marked as shown in the library');
+await showToggle.click();
+await toastSays('Os itens de Nova história agora aparecem só no álbum, não na biblioteca.');
+assert.deepEqual((await inLibrary()).filter(id => storyPictures.includes(id)), [], 'and out of it again');
+console.log('PASS the story\'s pictures go to its album under Histórias, out of the library, and "Mostrar na biblioteca" brings them in and out');
+// From the album to its story, and from the story's contents back to its album
+await page.locator('#scope-button').click();
+await page.locator('#scope-menu .menu-item', { hasText: 'Abrir a história' }).click();
+await page.locator('#story-side .story-title strong', { hasText: 'Nova história' }).waitFor();
+await page.locator('#story-album').click();
+await page.locator('.workspace').waitFor();
+await page.waitForFunction(() => document.querySelectorAll('#feed .tile[data-id]').length === 7 && location.hash === '', null, { timeout: 10000 });
+assert.match(await page.locator('#scope-button').textContent(), /Nova história/);
+console.log('PASS the album opens its story, and the story\'s album button opens the album');
 
 // The reader: the text on the whole screen, as pages or scrolling, with bars that come and go with a tap in the middle,
 // and its settings kept with the account. A longer second chapter gives it pages to turn.
@@ -940,5 +971,5 @@ await toastSays('O arquivo não é um zip.');
 assert.equal(await page.locator('.story-card').count(), 4);
 await listFits();
 assert.deepEqual(errors, []);
-console.log('PASS stories in the browser: Claude key in the settings, a story duplicated from the list with its conversation, the whole story downloaded as a zip and imported back (and a zip of Markdown chapters), the section switch, text only chosen before the first message, a new story planned in secret and written in formatted chapters with an illustration (in the story album too), the writer at work and its notes, the plan only after a warning, editing by hand, switching to GPT in the same conversation and back to Claude in a new one, the cover made, edited and opened from the list (whole, on cards of one height), the whole cover in the window of the story (on a phone too) and on the whole screen, the sheets with the visual style and the lettering sample, illustrating written chapters with the cost in view, a photographic version of an illustration in its place, gallery images attached to a message, tabs on a phone, the Markdown download and the list, and the reader in full screen (pages side by side on a tablet lying down, one wide page standing up, taps, keys, chapters, the settings kept with the account, scrolling, a phone, back and Esc, the line at the foot turned off)');
+console.log('PASS stories in the browser: Claude key in the settings, a story duplicated from the list with its conversation, the whole story downloaded as a zip and imported back (and a zip of Markdown chapters), the section switch, text only chosen before the first message, a new story planned in secret and written in formatted chapters with an illustration (in the story\'s album, out of the library, shown there with Mostrar na biblioteca and opened from the story), the writer at work and its notes, the plan only after a warning, editing by hand, switching to GPT in the same conversation and back to Claude in a new one, the cover made, edited and opened from the list (whole, on cards of one height), the whole cover in the window of the story (on a phone too) and on the whole screen, the sheets with the visual style and the lettering sample, illustrating written chapters with the cost in view, a photographic version of an illustration in its place, gallery images attached to a message, tabs on a phone, the Markdown download and the list, and the reader in full screen (pages side by side on a tablet lying down, one wide page standing up, taps, keys, chapters, the settings kept with the account, scrolling, a phone, back and Esc, the line at the foot turned off)');
 await browser.close();

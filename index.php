@@ -37,6 +37,8 @@ try {
     Catalog::use($vault->modelLists($key));
     // Release the session lock: thumbnails, polling and long generations must not wait for one another.
     if (!in_array($action,['logout','password'],true)) session_write_close();
+    // Once per account: the albums the stories made before keep their pictures out of the library (Stories::adoptAlbums).
+    if (in_array($action,['library','albums','jobs','stories','story'],true)) { try { $stories->adoptAlbums($key); } catch (\Throwable $e) { Studio\logFailure($e); } }
     if ($action==='logout') { $auth->logout(); Studio\json(['ok'=>true]); }
     if ($action==='password') { $auth->changePassword((string)($input['current']??''),(string)($input['password']??'')); Studio\json(['ok'=>true,'csrf'=>$auth->csrf()]); }
     // The account's OpenAI key, for the images, the prompt planning and the GPT writer. An empty key removes it.
@@ -124,7 +126,7 @@ try {
         $sid=(string)($input['story']??''); $space=($input['space']??'story')==='comic'?'comic':'story';
         if ($space==='comic' && !$stories->comics()->settings($sid,$key)['started']) throw new HttpError(422,t('Start the comic adaptation first.'));
         if (isset($input['retry'])) {
-            $from=(string)$input['retry']; $created=$jobs->retry(bin2hex(random_bytes(16)),$from,null,$key);
+            $from=(string)$input['retry']; $created=$jobs->retry(bin2hex(random_bytes(16)),$from,null,$key,$space==='comic'?$stories->album($sid,$key,'comic'):null);
             $stories->retryCastPicture($sid,$from,$created[0]['id'],$key);
             Studio\json(['jobs'=>$created,'cast'=>$stories->cast($sid,$key,$space)],201);
         }
@@ -243,8 +245,10 @@ try {
         // The pictures' old ids (the file's) => the ones they have here, for the conversation, which names them.
         $images=array_filter(is_array($input['images']??null)?$input['images']:[],fn($v,$k)=>is_string($k)&&is_string($v),ARRAY_FILTER_USE_BOTH);
         if (is_array($input['conversation']??null)) $writer->importConversation($made['id'],['title'=>$stories->listed($made['id'],$key)['title']]+$input['conversation'],$made['map']+$images,$key);
-        // Its pictures go into the story's album, as an illustration would, so they are easy to find in the gallery.
-        if (($input['pictures']??false)===true) $stories->album($made['id'],$key);
+        // The pictures it sent to the gallery go into the story's albums (the comic's into the adaptation's), as an
+        // illustration would: they are found there, out of the library. One the account already had stays where it was.
+        $brought=array_values(array_filter(is_array($input['pictures']??null)?array_slice($input['pictures'],0,5000):[],fn($v)=>is_string($v)&&preg_match('/\A[a-f0-9]{32}\z/D',$v)));
+        if ($brought) { $stories->album($made['id'],$key,'book',$brought); if ($stories->pictures($made['id'],'comic',$key)) $stories->album($made['id'],$key,'comic',$brought); }
         $limit=Studio\iniBytes(ini_get('post_max_size'));
         Studio\json(['story'=>$stories->listed($made['id'],$key),'dropped'=>$made['dropped'],'batch'=>$limit>0?min(Writer::PACK_BATCH,(int)($limit*0.6)):Writer::PACK_BATCH],201);
     }
@@ -366,6 +370,8 @@ try {
     }
     if ($action==='captions') Studio\json(['items'=>$vault->captions(array_values(array_filter(explode(',',(string)($_GET['ids']??'')))),$key)]);
     if ($action==='albums') Studio\json(['albums'=>$vault->albums($key)]);
+    // Whether an album's items show in the library too, or only in the album.
+    if ($action==='album-library') { $vault->setAlbumLibrary((string)($input['id']??''),($input['library']??true)!==false); Studio\json(['ok'=>true]); }
     if ($action==='album-create') {
         $album=$vault->createAlbum((string)($input['name']??''),$key);
         if (!empty($input['ids'])) $album['count']=$vault->bulk('album-add',$input['ids'],$album['id']);

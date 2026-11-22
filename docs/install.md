@@ -116,7 +116,7 @@ The threat model and what the app doesn't protect against are in [SECURITY.md](.
 
 ```sh
 # PHP: the vault, the API contracts, stories, comics, Gemini, the model catalog, visual novels, startup, translations
-php tests/run.php && php tests/stories.php && php tests/comics.php && php tests/gemini.php && php tests/catalog.php && php tests/vn.php && php tests/startup.php && php tests/i18n.php
+php tests/run.php && php tests/stories.php && php tests/comics.php && php tests/gemini.php && php tests/catalog.php && php tests/vn.php && php tests/albums.php && php tests/startup.php && php tests/i18n.php
 # JavaScript
 node tests/outpaint.mjs && node tests/lineage.mjs && node tests/pricing.mjs && node tests/video.mjs && node tests/library.mjs && node tests/clean.mjs && node tests/story.mjs && node tests/reader.mjs && node tests/comics.mjs && node tests/pack.mjs
 # A local server

@@ -4,6 +4,19 @@ What changed in each version of Atelier. Versions follow [Semantic Versioning](h
 
 To update an install, replace the app files with the ones from the new zip and keep `config.php`, `data-dir.php` (if present) and the data folder.
 
+## [1.1.0] - 2026-11-22
+
+### Pictures
+
+- The pictures made for a story, a comic or a visual novel no longer fill the library. Each story gets an album for its covers, illustrations and sheets, each comic or manga adaptation one for its pages and sheets, and each visual novel one for its sprites, backgrounds and CGs. They are listed under Stories, Comics and manga, and Visual novels in the library menu, and open with every picture.
+- Any album, your own included, can keep its pictures out of the library or show them there too, with "Show in the library" in the menu while the album is open. Adding pictures to an album kept out moves them there.
+- A picture from the library that a story only uses (a cover or a sheet picked from the gallery) stays in the library.
+- Existing installs move the pictures the stories already made into these albums the first time each account opens the app.
+
+### Stories
+
+- A button by the cover opens the story's or visual novel's album, and the comic window has one for the adaptation's. From an album, "Open the story" goes back.
+
 ## [1.0.0] - 2026-11-22
 
 The first public release.
@@ -37,4 +50,5 @@ The first public release.
 - English and Brazilian Portuguese.
 - PHP 8.2 or newer with SQLite, no build step. Long requests keep going in the background, or in a separate process (`bin/worker.php`) on hosts that stop web processes early.
 
+[1.1.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.1.0
 [1.0.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.0.0

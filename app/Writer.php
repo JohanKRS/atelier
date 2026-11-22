@@ -2972,12 +2972,13 @@ TEXT;
                 .' Spell every word exactly as given.';
             if ($sample !== null) $references[] = ['id'=>$sample];
         }
-        // $extra: options of its own (a sprite's transparent background), the direction of each image.
+        // $extra: options of its own (a sprite's transparent background), the direction of each image, the album it goes
+        // into (space: the story's, book, or its comic adaptation's, comic).
         $lines = array_values($extra['lines'] ?? []);
         if (count($lines) === 1) $prompt .= "\n\nDirection for this image: ".$lines[0];
         return $this->jobs->create(['id'=>self::newId(), 'prompt'=>$prompt, 'label'=>mb_substr($label, 0, 200),
             'options'=>($extra['options'] ?? []) + ['model'=>$writer['image_model'], 'quality'=>$writer['image_quality'], 'size'=>self::sizeFor($writer, $aspect), 'thinking'=>'off', 'n'=>1, 'previews'=>1],
-            'references'=>$references, 'album'=>$this->stories->album($storyId, $key)] + (count($lines) > 1 ? ['lines'=>$lines] : []), $key);
+            'references'=>$references, 'album'=>$this->stories->album($storyId, $key, $extra['space'] ?? 'book')] + (count($lines) > 1 ? ['lines'=>$lines] : []), $key);
     }
 
     private function illustrate(array $in, ToolContext $c): array
@@ -3043,7 +3044,7 @@ TEXT;
         if ($comic) $prompt .= "\n\nA reference picture for the story's ".Comics::KIND_NAMES[$this->stories->comics()->settings($c->storyId, $key)['kind']].' adaptation: drawn as its pages are, '
             .($this->stories->comics()->settings($c->storyId, $key)['color'] === 'bw' ? 'in black and white.' : 'in full color.');
         $jobId = $this->imageRequest($c->storyId, $c->writer, $prompt, ($comic ? t('Adaptation sheet of {name}', ['name'=>$who]) : t('Sheet of {name}', ['name'=>$who])).($caption !== '' ? ' · '.$caption : ''), $in['aspect'] ?? '3:2', $references, $key, false,
-            $comic ? $this->stories->comics()->style($c->storyId, $key) : null)['id'];
+            $comic ? $this->stories->comics()->style($c->storyId, $key) : null, ['space'=>$comic ? 'comic' : 'book'])['id'];
         $c->jobs[] = $jobId;
         $done = $this->stories->updateCast($c->storyId, ['character'=>$who, 'kind'=>$n === null ? ($in['kind'] ?? 'character') : null, 'note'=>$in['note'] ?? null, 'add'=>[['job'=>$jobId, 'caption'=>$caption]]], $c->by, $key, $space);
         $who = $done['character']['name'];
@@ -3203,8 +3204,10 @@ TEXT;
         }
         if ($kind !== 'edit' && $instruction !== '') $label .= ': '.mb_substr($instruction, 0, 120);
         $references = array_merge([['id'=>$imageId]], array_values(array_filter($references, fn($r) => $r['id'] !== $imageId)));
+        // A picture only of the comic (a page, a sheet of the adaptation) keeps its new version in the comic's album.
+        $space = array_filter($where, fn($w) => !preg_match('/^(page \d+ of the comic|the adaptation\'s sheet of )/', $w)) ? 'book' : 'comic';
         $job = $this->jobs->create(['id'=>self::newId(), 'prompt'=>$prompt, 'label'=>$label, 'options'=>$options, 'references'=>$references,
-            'parent_id'=>$imageId, 'operation'=>$operation, 'album'=>$this->stories->album($storyId, $key)] + ($kind !== 'edit' ? ['typed'=>$person ? $instruction : ''] : []), $key)[0];
+            'parent_id'=>$imageId, 'operation'=>$operation, 'album'=>$this->stories->album($storyId, $key, $space)] + ($kind !== 'edit' ? ['typed'=>$person ? $instruction : ''] : []), $key)[0];
         $this->stories->startEdit($storyId, $job['id'], $imageId, $caption, $key, $by, $coverOnly);
         return [$job, $where];
     }
@@ -3451,7 +3454,7 @@ TEXT;
         if (!$person && is_string($style['lettering']['job'])) { try { $style['lettering']['image'] = $this->readyImage($style['lettering']['job'], $key, $wait); } catch (HttpError $e) { if ($e->kind === 'wait') throw $e; } }
         $prompt = self::pagePrompt($page, $settings, $people, $places, $previous, $others, $instruction, count($comics->pages($storyId, $key)));
         $job = $this->imageRequest($storyId, ['image_scale'=>$settings['scale']] + $writer, $prompt, t('Page {n} · {title}', ['n'=>$page['number'], 'title'=>mb_substr($story['title'] !== '' ? $story['title'] : t('Untitled'), 0, 100)]),
-            $settings['aspect'], $references, $key, true, $style);
+            $settings['aspect'], $references, $key, true, $style, ['space'=>'comic']);
         $comics->setJob($storyId, $pageId, $job['id'], $key);
         return $job;
     }
@@ -3526,7 +3529,7 @@ TEXT;
     {
         $page = $this->stories->comics()->page($storyId, $pageId, $key);
         if (!is_string($page['job'])) throw new HttpError(409, t('This page has no drawing to try again.'));
-        $job = $this->jobs->retry(self::newId(), $page['job'], null, $key)[0];
+        $job = $this->jobs->retry(self::newId(), $page['job'], null, $key, $this->stories->album($storyId, $key, 'comic'))[0];
         $this->stories->comics()->retryJob($storyId, $pageId, $job['id'], $key);
         return $job;
     }
@@ -3710,7 +3713,7 @@ TEXT;
             .' a speech balloon saying "'.t('You won\'t believe what I saw.').'"; a jagged shout balloon saying "'.t('LOOK OUT!').'"; a whisper balloon (dashed outline) saying "'.t('psst… over here').'"; a narration caption box saying "'.t('That night, nobody slept.').'";'
             ." and two large, expressive sound effects in the same family, \"BLAM!\" and \"CRAAASH\".";
         $job = $this->imageRequest($storyId, $writer, $prompt, ($comic ? t('Lettering sample of the adaptation · {title}', ['title'=>mb_substr($story['title'] !== '' ? $story['title'] : t('Untitled'), 0, 120)]) : t('Lettering sample · {title}', ['title'=>mb_substr($story['title'] !== '' ? $story['title'] : t('Untitled'), 0, 120)])), '3:2', [], $key, false,
-            $comic ? $this->stories->comics()->style($storyId, $key) : null);
+            $comic ? $this->stories->comics()->style($storyId, $key) : null, ['space'=>$comic ? 'comic' : 'book']);
         $this->stories->updateStyle($storyId, ['lettering_job'=>$job['id']], $by, $key, $space);
         return $job;
     }
