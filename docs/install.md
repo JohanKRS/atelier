@@ -13,13 +13,13 @@ Apache and LiteSpeed read the included `.htaccess`. On nginx, see [nginx](#nginx
 
 ## Install
 
-1. **Upload** `index.php`, `mcp.php`, `.htaccess`, `robots.txt`, `favicon.ico`, `config.example.php` and the folders `app/`, `assets/` and `bin/` to a folder of your site. The root of a domain or a subfolder both work. Don't upload `.git`, `tests/` or `docs/`.
+1. **Upload** the contents of the zip from the [latest release](https://github.com/JohanKRS/atelier/releases/latest) to a folder of your site: `index.php`, `mcp.php`, `.htaccess`, `robots.txt`, `favicon.ico`, `config.example.php` and the folders `app/`, `assets/` and `bin/`. The root of a domain or a subfolder both work. From a clone of the repository, upload the same files and leave out `.git`, `tests/` and `docs/`.
 2. **Configure.** Copy `config.example.php` to `config.php` and set `setup_token` to a long random code (24 characters or more), for example from `php -r 'echo bin2hex(random_bytes(24)), PHP_EOL;'`. The token only allows creating the first account; it is not a password, and you can clear it afterwards.
 3. **The data folder.** The app creates a private folder next to your document root on its own. PHP must be able to write there. If your host doesn't allow it, set `data_dir` in `config.php` to an absolute path outside every published folder, such as `/home/you/atelier-data`. The app refuses to store data inside the document root or its own folder.
 4. **Create the first account.** Open the site, enter the setup token, and choose a name and a password of at least 12 characters. This account is the administrator. Keep the password safe: **there is no way to recover it, or the library, without it.**
 5. **Add your keys.** In **Settings › API keys**, add your OpenAI key, and optionally a Claude (Anthropic) key and a Gemini (Google) key for the writer and Nano Banana. Keys are encrypted in your library and never sent back to the browser. **Test** checks a key with a tiny request.
 
-To update, replace the app files and keep `config.php`, `data-dir.php` (if present) and the data folder.
+To update, replace the app files with the ones from the new release (what changed is in [CHANGELOG.md](../CHANGELOG.md)) and keep `config.php`, `data-dir.php` (if present) and the data folder.
 
 ## Configuration
 

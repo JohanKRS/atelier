@@ -62,7 +62,7 @@ A mesma história pode virar outra coisa.
 
 Você precisa de uma hospedagem com PHP 8.2 ou mais novo e HTTPS. Não tem banco de dados para configurar, nem Composer, nem etapa de build: é PHP, SQLite e JavaScript puro.
 
-1. Envie o app para o seu site, copie `config.example.php` para `config.php` e defina um `setup_token` longo e aleatório.
+1. Baixe o zip da [versão mais recente](https://github.com/JohanKRS/atelier/releases/latest) e envie o que está dentro dele para o seu site. Copie `config.example.php` para `config.php` e defina um `setup_token` longo e aleatório.
 2. Abra o site, informe esse código e crie a primeira conta.
 3. Em **Configurações › Chaves de API**, cadastre a sua chave da OpenAI. As chaves do Claude e do Gemini são opcionais e servem ao escritor.
 
