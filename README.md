@@ -62,7 +62,7 @@ The same story can become something else.
 
 You need a web host with PHP 8.2 or newer and HTTPS. There's no database server to set up, no Composer and no build step: it's PHP, SQLite and plain JavaScript.
 
-1. Upload the app to your site, copy `config.example.php` to `config.php` and set a long random `setup_token`.
+1. Download the zip from the [latest release](https://github.com/JohanKRS/atelier/releases/latest) and upload what's inside to your site. Copy `config.example.php` to `config.php` and set a long random `setup_token`.
 2. Open the site, enter that token and create the first account.
 3. In **Settings › API keys**, add your OpenAI key. Claude and Gemini keys are optional; they power the writer.
 
