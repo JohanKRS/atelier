@@ -1,0 +1,89 @@
+name: Checks
+# Only when started by hand (Actions › Checks › Run workflow), never on push or pull request. The same steps run on
+# any machine with PHP and Node: see "Development and tests" in docs/install.md.
+on: [workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  php:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.2', '8.3', '8.4']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pdo_sqlite, sodium, curl, gd, mbstring
+          ini-values: memory_limit=512M
+          coverage: none
+      - name: PHP syntax
+        run: find . -name '*.php' -not -path './config.php' -print0 | xargs -0 -n1 php -l
+      - name: JavaScript syntax
+        run: |
+          node --check assets/app.js
+          node --check assets/outpaint.js
+          node --check assets/lineage.js
+          node --check assets/pricing.js
+          node --check assets/video.js
+          node --check assets/library.js
+          node --check assets/clean.js
+          node --check assets/clean-worker.js
+          node --check assets/story.js
+          node --check assets/stories.js
+          node --check assets/reader.js
+          node --check assets/comics.js
+          node --check assets/pack.js
+          node --check assets/vn.js
+          # The browser loads app.js as a module; checked as one, a name declared twice is an error.
+          cp assets/app.js "$RUNNER_TEMP/app.mjs" && node --check "$RUNNER_TEMP/app.mjs"
+          node tests/outpaint.mjs
+          node tests/lineage.mjs
+          node tests/pricing.mjs
+          node tests/video.mjs
+          node tests/library.mjs
+          node tests/clean.mjs
+          node tests/story.mjs
+          node tests/reader.mjs
+          node tests/comics.mjs
+          node tests/pack.mjs
+      - name: Vault and API contract tests
+        run: |
+          php tests/run.php
+          php tests/stories.php
+          php tests/comics.php
+          php tests/gemini.php
+          php tests/catalog.php
+          php tests/vn.php
+          php tests/i18n.php
+      - name: Installation regression checks
+        run: |
+          php tests/startup.php
+          mv config.example.php "$RUNNER_TEMP/config.example.php"
+      - name: HTTP authentication checks
+        run: |
+          test_data="$RUNNER_TEMP/imagegen-http"
+          test_token="$(openssl rand -hex 24)"
+          export TEST_DATA="$test_data" TEST_TOKEN="$test_token"
+          php -r 'file_put_contents("config.php", "<?php return " . var_export(["data_dir"=>getenv("TEST_DATA"), "setup_token"=>getenv("TEST_TOKEN"), "require_https"=>false], true) . ";");'
+          php -S 127.0.0.1:8099 -t . > "$RUNNER_TEMP/imagegen-server.log" 2>&1 &
+          for attempt in 1 2 3 4 5; do curl -s http://127.0.0.1:8099/ > /dev/null && break; sleep 1; done
+          python3 tests/http_checks.py http://127.0.0.1:8099 "$test_data" "$test_token"
+      - name: Browser integration and visual checks
+        if: matrix.php == '8.3'
+        env:
+          TEST_DATA: ${{ runner.temp }}/imagegen-http
+          TEST_PASSWORD: new-test-password-long-enough
+        run: |
+          npm install --no-save @playwright/test@1.56.1
+          # The runner image already ships Chrome's system libraries. When its apt mirror cannot be
+          # resolved (seen repeatedly on hosted runners), install the browser alone instead of failing.
+          npx playwright install --with-deps chromium || npx playwright install chromium
+          node tests/browser.mjs
+          node tests/stories-browser.mjs
+          node tests/comics-browser.mjs
+          node tests/gemini-browser.mjs
+          node tests/vn-browser.mjs
+          node tests/language-browser.mjs

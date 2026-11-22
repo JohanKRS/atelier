@@ -1,0 +1,47 @@
+# Atelier on nginx with PHP-FPM.
+#
+# nginx ignores .htaccess, so the rules that file holds for Apache and LiteSpeed live here: only index.php, mcp.php and
+# the files in assets/ are served; app/, bin/, tests/, the configuration and every data file stay closed. Without these
+# rules the app warns its administrator in Settings.
+#
+# The example assumes the app sits at the root of the site. In a subfolder, put the folder's name in front of each path
+# (for example ^/atelier/(app|bin|...)).
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name atelier.example.com;
+    root /var/www/atelier;              # the folder that holds index.php
+    index index.php;
+
+    # ssl_certificate     /etc/letsencrypt/live/atelier.example.com/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/atelier.example.com/privkey.pem;
+
+    # References and masks go up to 48 MB per request; videos arrive in pieces of up to 8 MB.
+    client_max_body_size 50m;
+
+    # Internal folders and files: never served. These come first, so they win over the PHP rule below.
+    location ~ ^/(app|bin|tests|storage|docs|\.git|\.github)(/|$) { return 404; }
+    location ~ ^/(config(\.example)?\.php|data-dir\.php.*|README\.md|SECURITY\.md|PROJECT_STATUS\.md)$ { return 404; }
+    location ~ \.(sqlite|enc|part|log|lock)$ { return 404; }
+    location ~ /\.(?!well-known/) { return 404; }
+
+    # The two entry points. Generations wait for the image API for up to api_timeout (600 s by default), and both
+    # stream progress, so the answer is passed on as it is written.
+    location ~ ^/(index|mcp)\.php$ {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param HTTPS on;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+        fastcgi_read_timeout 1200s;
+        fastcgi_buffering off;
+    }
+    # No other PHP file is an entry point.
+    location ~ \.php$ { return 404; }
+
+    location / { try_files $uri $uri/ =404; }
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header X-Robots-Tag "noindex, nofollow, noarchive, noimageindex" always;
+}

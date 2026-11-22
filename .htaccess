@@ -1,0 +1,37 @@
+Options -Indexes
+DirectoryIndex index.php
+<FilesMatch "^(config(\.example)?\.php|data-dir\.php|README\.md|SECURITY\.md|PROJECT_STATUS\.md|.*\.(sqlite|enc|part|log|lock))$">
+  Require all denied
+</FilesMatch>
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule ^(?:app|bin|tests|storage|\.git|\.github)(?:/|$) - [F,L]
+  # MCP clients authenticate with "Authorization: Bearer"; CGI/FastCGI setups drop that header unless it is passed on.
+  RewriteCond %{HTTP:Authorization} .
+  RewriteRule ^mcp\.php$ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+</IfModule>
+<IfModule mod_headers.c>
+  Header always set X-Robots-Tag "noindex, nofollow, noarchive, noimageindex"
+  Header always set Referrer-Policy "no-referrer"
+  Header always set X-Content-Type-Options "nosniff"
+  # Scripts, styles and the translations are revalidated on every load (a cheap 304 when unchanged), so a new upload shows up at once
+  # even behind a CDN that ignores the version in the URL.
+  <FilesMatch "\.(js|css|json)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+  # Same for the icons and the app manifest, so a new icon replaces the old one on the next visit.
+  <FilesMatch "^(icon(-[0-9a-z]+)*\.(svg|png)|apple-touch-icon\.png|favicon\.ico|manifest\.webmanifest)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>
+# LiteSpeed: keep only the long requests alive if the client or a proxy disconnects, and lift their connection
+# timeout: image generations (run), the story writer's turns when they run in the web server (story-run) and the
+# hosting test (host-test; host-test-plain is left out on purpose, to compare). They go on in the background after
+# answering. LiteSpeed docs advise against noabort for every request.
+<IfModule Litespeed>
+  RewriteEngine On
+  RewriteCond %{QUERY_STRING} (^|&)action=(story-run|run|host-test)(&|$)
+  RewriteRule ^(index\.php)?$ - [E=noabort:1,E=noconntimeout:1]
+  RewriteCond %{REQUEST_METHOD} =POST
+  RewriteRule ^mcp\.php$ - [E=noabort:1,E=noconntimeout:1]
+</IfModule>

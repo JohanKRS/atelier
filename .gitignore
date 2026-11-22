@@ -1,0 +1,12 @@
+/config.php
+/data-dir.php
+/data-dir.php.*.tmp
+/storage/
+*.sqlite*
+*.enc
+.env*
+/dist/
+/node_modules/
+/tests/artifacts/
+*.log
+.DS_Store
