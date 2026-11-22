@@ -269,6 +269,7 @@ final class Stories
             'notes'=>['text'=>$notes['text'], 'by'=>$notes['by'], 'at'=>$notes['at'], 'rev'=>$notes['rev']],
             'plan'=>['words'=>self::words($plan['text']), 'by'=>$plan['by'], 'at'=>$plan['at'], 'rev'=>$plan['rev']] + ($withPlan ? ['text'=>$plan['text']] : []),
             'conversation'=>(int)$row['conversation'], 'reading'=>$this->meta($row, $key)['reading'] ?? null, 'cast'=>$this->castDocument($row, $key),
+            'albums'=>$this->albums($id, $key),
             'editing'=>array_map(fn($e) => ['image'=>$e['image'], 'failed'=>!empty($e['failed'])], $this->edits($id, $key)),
             'chapters'=>array_map(fn($c) => ['id'=>$c['id'], 'title'=>$c['title'], 'text'=>$c['text'], 'summary'=>$c['summary'], 'rev'=>$c['rev'],
                 'by'=>$c['by'], 'updated'=>$c['updated'], 'words'=>self::words($c['text'])], $chapters),
@@ -301,35 +302,182 @@ final class Stories
             if (array_key_exists('writer', $fields) && is_array($fields['writer'])) $m['writer'] = $fields['writer'];
             if (array_key_exists('cover_design', $fields)) $m['cover_design'] = self::cleanCoverDesign($fields['cover_design']);
             $this->vault->db->prepare('UPDATE stories SET meta=CAST(? AS BLOB) WHERE id=?')->execute([self::seal($m, $key, "story:$id"), $id]);
-            // The story's album follows its title.
-            if (array_key_exists('title', $fields) && isset($m['album']) && $this->vault->hasAlbum($m['album'])) $this->vault->renameAlbum($m['album'], self::albumName($m['title']), $key);
+            // The story's albums follow its title.
+            if (array_key_exists('title', $fields)) $this->renameAlbums($id, $key);
             $this->touch($id);
         });
         return $this->summary($this->row($id), $key);
     }
 
-    private static function albumName(string $title): string { return mb_substr($title !== '' ? $title : t('Untitled story'), 0, 80); }
+    // -----------------------------------------------------------------------------------------------------------------
+    // The story's albums in the library: one for its pictures (space book: the covers, the illustrations, the sheets,
+    // the style and lettering pictures, a visual novel's sprites, backgrounds and CGs) and one for its comic adaptation
+    // (space comic: the pages and the adaptation's own sheets and lettering). Every picture made for the story goes into
+    // one of them as it is saved, and they keep their pictures out of the library: the library shows the person's own
+    // pictures, and each album opens from it with everything of its story. A library picture the story only uses (a
+    // cover chosen from the gallery) stays in the library.
+    // -----------------------------------------------------------------------------------------------------------------
+    public const ALBUM_SPACES = ['book'=>'album', 'comic'=>'comic_album'];
+
+    /** The album's name: the story's title, and for the comic's the kind of comic. */
+    private function albumName(string $id, array $m, string $space, string $key): string
+    {
+        $title = (string)($m['title'] ?? '') !== '' ? (string)$m['title'] : t('Untitled story');
+        if ($space !== 'comic') return mb_substr($title, 0, 80);
+        $title = mb_substr($title, 0, 60);
+        return mb_substr(match ($this->comics()->settings($id, $key)['kind']) {
+            'comic' => t('{title} (comic book)', ['title'=>$title]),
+            'graphic_novel' => t('{title} (graphic novel)', ['title'=>$title]),
+            default => t('{title} (manga)', ['title'=>$title]) }, 0, 80);
+    }
+
+    /** The story's albums take its title again (and the comic's its kind). */
+    public function renameAlbums(string $id, string $key): void
+    {
+        $m = $this->meta($this->row($id), $key);
+        foreach (self::ALBUM_SPACES as $space => $field)
+            if (is_string($m[$field] ?? null) && $this->vault->hasAlbum($m[$field])) $this->vault->renameAlbum($m[$field], $this->albumName($id, $m, $space, $key), $key);
+    }
+
+    /** The setting (with the account's id) that says the account's albums were adopted, or when that started. */
+    public const ADOPTED = 'albums-apart:';
 
     /**
-     * The story's album in the library, where its illustrations go: made with the story's title the first time it is
-     * needed (and again if the person deleted it), with the illustrations the story already has.
+     * Once per account, the albums the stories made before their albums kept their pictures out of the library: each
+     * one now says which story made it and keeps its pictures out of the library, and a comic adaptation gets an album of
+     * its own with its pages and sheets (moved out of the story's; a sheet the book uses too stays in both). A library
+     * picture the album was made with (a cover chosen from the gallery before the story had any picture of its own) goes
+     * back to the library: it only stays when it was made for the story or came with a story brought from a file.
+     * Runs in the first request of the account that needs it; a request at the same time doesn't wait for it.
      */
-    public function album(string $id, string $key): string
+    public function adoptAlbums(string $key): void
     {
-        [$album, $images] = $this->transaction(function () use ($id, $key) {
-            $m = $this->meta($this->row($id), $key);
-            if (isset($m['album']) && $this->vault->hasAlbum($m['album'])) return [$m['album'], []];
-            $album = $this->vault->createAlbum(self::albumName((string)($m['title'] ?? '')), $key)['id'];
-            $m['album'] = $album;
-            $this->vault->db->prepare('UPDATE stories SET meta=CAST(? AS BLOB) WHERE id=?')->execute([self::seal($m, $key, "story:$id"), $id]);
-            $images = isset($m['cover']) && is_string($m['cover']) ? [$m['cover']] : [];
-            foreach ($this->chapters($id, $key) as $c) if (preg_match_all(self::MARKER, $c['text'], $found, PREG_SET_ORDER)) foreach ($found as $f) if ($f[2] === 'img') $images[] = $f[3];
-            $cast = $this->castDocument($this->row($id), $key);
-            foreach ([...$cast['characters'], $cast['style']] as $c) foreach ($c['images'] as $im) if (is_string($im['image'] ?? null)) $images[] = $im['image'];
-            return [$album, $images];
+        $name = self::ADOPTED.$this->owner();
+        if ($this->vault->get($name) === 'done') return;
+        $claimed = $this->transaction(function () use ($name) {
+            $state = $this->vault->get($name);
+            if ($state === 'done' || ($state !== null && (int)$state > time() - 600)) return false;
+            $this->vault->set($name, (string)time());
+            return true;
         });
+        if (!$claimed) return;
+        $q = $this->vault->db->prepare('SELECT id FROM stories WHERE user_id=? ORDER BY created'); $q->execute([$this->owner()]);
+        foreach ($q->fetchAll(\PDO::FETCH_COLUMN) as $id) {
+            try { $this->adoptStoryAlbums((string)$id, $key); }
+            catch (\Throwable $e) { logFailure($e); }
+        }
+        $this->vault->set($name, 'done');
+    }
+
+    private const STORYBOARD = 'rough storyboard sketch of this page';
+    private const ADAPTATION_SHEET = "A reference picture for the story's ";
+
+    private function adoptStoryAlbums(string $id, string $key): void
+    {
+        $row = $this->row($id); $m = $this->meta($row, $key);
+        $album = is_string($m['album'] ?? null) && $this->vault->hasAlbum($m['album']) ? $m['album'] : null;
+        if ($album === null || $this->vault->albumOrigin($album, $key)['kind'] !== null) return;
+        $this->vault->adoptAlbum($album, ['kind'=>($m['kind'] ?? 'story') === 'vn' ? 'vn' : 'story', 'story'=>$id], $key);
+        // The pictures gathered when the album was made (the ones the story had then), apart from those made for it.
+        $added = $this->vault->albumAdded($album); $created = (int)$this->vault->albumCreated($album);
+        $gathered = array_keys(array_filter($added, fn($at) => $at <= $created + 5));
+        $made = $gathered ? $this->vault->madeForAlbums($gathered, $key) : [];
+        $back = [];
+        foreach ($gathered as $image) {
+            if (isset($made[$image])) continue;
+            try { $it = $this->vault->image($image, $key, true); } catch (HttpError) { continue; }
+            // Brought with the story from a file: imported right before the album was made.
+            if (in_array(Vault::operation($it), ['import', 'frame'], true) && $it['created'] >= $created - 3600 && $it['created'] <= $created + 5) continue;
+            $back[] = $image;
+        }
+        if ($back) $this->vault->bulk('album-remove', $back, $album);
+        if (($row['comic'] ?? null) === null) return;
+        // The comic's pictures: its pages and sheets as they are now, the pages and adaptation sheets the story's album
+        // holds (older versions too), and every version made from one of them.
+        $items = [];
+        foreach (array_keys(array_diff_key($added, array_flip($back))) as $image) {
+            try { $items[$image] = $this->vault->image($image, $key, true); } catch (HttpError) {}
+        }
+        $comic = array_fill_keys(array_intersect($this->pictures($id, 'comic', $key), array_keys($items)), true);
+        foreach ($items as $image => $it) {
+            $prompt = (string)($it['prompt'] ?? '');
+            if (str_contains($prompt, self::STORYBOARD) || str_contains($prompt, self::ADAPTATION_SHEET)) $comic[$image] = true;
+        }
+        do {
+            $more = false;
+            foreach ($items as $image => $it) {
+                $parent = Vault::lineageParent($it);
+                if (!isset($comic[$image]) && $parent !== null && isset($comic[$parent])) { $comic[$image] = true; $more = true; }
+            }
+        } while ($more);
+        if (!$comic) return;
+        $comicAlbum = $this->album($id, $key, 'comic');
+        $this->vault->bulk('album-add', array_keys($comic), $comicAlbum);
+        $book = array_flip($this->pictures($id, 'book', $key));
+        $moved = array_keys(array_diff_key($comic, $book));
+        if ($moved) $this->vault->bulk('album-remove', $moved, $album);
+    }
+
+    /** The ids of the story's albums that exist: ['book'=>?id, 'comic'=>?id]. */
+    public function albums(string $id, string $key): array
+    {
+        $m = $this->meta($this->row($id), $key); $out = [];
+        foreach (self::ALBUM_SPACES as $space => $field) $out[$space] = is_string($m[$field] ?? null) && $this->vault->hasAlbum($m[$field]) ? $m[$field] : null;
+        return $out;
+    }
+
+    /**
+     * The pictures the story uses in a space, as they are now: for the book the cover and the covers to choose from,
+     * the illustrations, the sheets, the style and the lettering, and a visual novel's art; for the comic its pages and
+     * the adaptation's sheets, style and lettering.
+     * @return list<string>
+     */
+    public function pictures(string $id, string $space, string $key): array
+    {
+        $row = $this->row($id); $m = $this->meta($row, $key); $images = [];
+        $castImages = function (array $cast) use (&$images) {
+            foreach ([...$cast['characters'], $cast['style']] as $c) foreach ($c['images'] as $im) if (is_string($im['image'] ?? null)) $images[] = $im['image'];
+            if (is_string($cast['style']['lettering']['image'] ?? null)) $images[] = $cast['style']['lettering']['image'];
+        };
+        if ($space === 'comic') {
+            if (($row['comic'] ?? null) === null) return [];
+            foreach ($this->comics()->pages($id, $key) as $p) if (is_string($p['image'])) $images[] = $p['image'];
+            $castImages($this->castDocument($row, $key, 'comic'));
+            foreach ($this->comics()->settings($id, $key)['style']['images'] as $im) if (is_string($im['image'] ?? null)) $images[] = $im['image'];
+        } else {
+            if (is_string($m['cover'])) $images[] = $m['cover'];
+            foreach (is_array($m['cover_choices'] ?? null) ? $m['cover_choices'] : [] as $c) if (is_string($c['image'] ?? null)) $images[] = $c['image'];
+            foreach ($this->chapterRows($id, $key) as $c) if (preg_match_all(self::MARKER, $c['text'], $found, PREG_SET_ORDER)) foreach ($found as $f) if ($f[2] === 'img') $images[] = $f[3];
+            $castImages($this->castDocument($row, $key));
+            if (($m['kind'] ?? 'story') === 'vn') foreach ($this->vn()->art($id, $key) as $list) if (is_array($list) && array_is_list($list)) foreach ($list as $a) if (is_string($a['image'] ?? null)) $images[] = $a['image'];
+        }
+        return array_values(array_unique(array_filter($images, fn($im) => (bool)preg_match('/\A[a-f0-9]{32}\z/D', $im))));
+    }
+
+    /**
+     * The story's album of a space (book or comic), where its pictures go. It is made the first time it is needed (and
+     * again if the person deleted it), kept out of the library, and made with the pictures the story already has that
+     * were made for it, and those of $brought (the pictures a story brought from a file sent to the gallery). A picture
+     * of the library the story only uses stays there. A story's copy makes its own the first time.
+     * @param list<string> $brought
+     */
+    public function album(string $id, string $key, string $space = 'book', array $brought = []): string
+    {
+        $field = self::ALBUM_SPACES[$space] ?? throw new \LogicException('Unknown album space.');
+        [$album, $images] = $this->transaction(function () use ($id, $key, $space, $field) {
+            $m = $this->meta($this->row($id), $key);
+            if (isset($m[$field]) && $this->vault->hasAlbum($m[$field])) return [$m[$field], []];
+            $first = !isset($m[$field]);
+            $kind = $space === 'comic' ? 'comic' : (($m['kind'] ?? 'story') === 'vn' ? 'vn' : 'story');
+            $album = $this->vault->createAlbum($this->albumName($id, $m, $space, $key), $key, ['kind'=>$kind, 'story'=>$id])['id'];
+            $m[$field] = $album;
+            $this->vault->db->prepare('UPDATE stories SET meta=CAST(? AS BLOB) WHERE id=?')->execute([self::seal($m, $key, "story:$id"), $id]);
+            // Made again after the person deleted it: only what comes next goes into it, the rest stays in the library.
+            return [$album, $first ? $this->pictures($id, $space, $key) : []];
+        });
+        if ($images) { $made = $this->vault->madeForAlbums($images, $key); $brought = array_flip($brought); $images = array_values(array_filter($images, fn($im) => isset($made[$im]) || isset($brought[$im]))); }
         // Adding is a transaction of its own in the vault.
-        if ($images) $this->vault->bulk('album-add', array_values(array_unique($images)), $album);
+        if ($images) $this->vault->bulk('album-add', $images, $album);
         return $album;
     }
 
@@ -353,7 +501,7 @@ final class Stories
     public function favorite(string $id, bool $on): void
     { $this->row($id); $this->vault->db->prepare('UPDATE stories SET favorite=? WHERE id=?')->execute([$on ? 1 : 0, $id]); }
 
-    /** Removes the story, its chapters and its conversation. Its illustrations stay in the gallery. */
+    /** Removes the story, its chapters and its conversation. Its pictures stay in its albums, which stay in the library. */
     public function delete(string $id): void
     {
         $this->row($id);
@@ -371,8 +519,8 @@ final class Stories
      * A copy of the story the person can change on its own: its details (with the new title), the bible, the plan, the
      * sheets and style, the chapters, the comic adaptation and a visual novel's scenes and art, each row new and sealed for itself. The pictures are the
      * same library images, which never change (a new version of one is a new image, put in place only in the story
-     * that asked for it), so nothing is copied in the gallery. Requests still making pictures go to both. The album,
-     * where the reader stopped and the favorite mark stay with the original: the copy makes its album when it needs one.
+     * that asked for it), so nothing is copied in the gallery. Requests still making pictures go to both. The albums,
+     * where the reader stopped and the favorite mark stay with the original: the copy makes its albums when it needs them.
      * Runs inside the caller's transaction, which copies the conversation with the writer with the returned map.
      * @return array{id:string,map:array<string,string>,title:string} the copy's id, the ids changed (story, chapters,
      *         pages) and the original's title
@@ -393,7 +541,7 @@ final class Stories
             $original = (string)($m['title'] ?? '');
             $title = self::cleanLine($title ?? '', 200, t('The title'));
             $m['title'] = $title !== '' ? $title : mb_substr(t('{title} (copy)', ['title'=>$original !== '' ? $original : t('Untitled story')]), 0, 200);
-            unset($m['album'], $m['reading']);
+            unset($m['album'], $m['comic_album'], $m['reading']);
             $meta = Crypto::seal(strtr(json_encode($m, JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES), $map), $key, "story:$new");
             $comic = null;
             if ($row['comic'] !== null) {
@@ -418,14 +566,14 @@ final class Stories
     /** What the list shows of a story. */
     public function listed(string $id, string $key): array { return $this->summary($this->row($id), $key); }
 
-    /** @return array<string,array{title:string,album:?string}> the title and album of every story of the account (for the history). */
+    /** @return array<string,array{title:string,albums:list<string>}> the title and albums of every story of the account (for the history). */
     public function titles(string $key): array
     {
         $q = $this->vault->db->prepare('SELECT id,meta FROM stories WHERE user_id=?'); $q->execute([$this->owner()]);
         $out = [];
         foreach ($q->fetchAll() as $r) {
             $m = $this->meta($r, $key);
-            $out[$r['id']] = ['title'=>(string)$m['title'], 'album'=>is_string($m['album'] ?? null) ? $m['album'] : null];
+            $out[$r['id']] = ['title'=>(string)$m['title'], 'albums'=>array_values(array_filter([$m['album'] ?? null, $m['comic_album'] ?? null], 'is_string'))];
         }
         return $out;
     }

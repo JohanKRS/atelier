@@ -312,10 +312,13 @@ try{
     [$ok,$out]=$writer->runTool('write_chapter',['title'=>'x'],$ctx);
     check(!$ok&&str_contains($out,'input.text is required'),'a tool input missing a field is refused before running');
 
-    // The story's album: its illustrations go there as well as into the library
+    // The story's album: its illustrations go there, out of the library
     $title=$stories->get($sid,$key)['title'];
     $album=array_values(array_filter($vault->albums($key),fn($a)=>$a['name']===$title));
-    check(count($album)===1&&$album[0]['count']===4,'the story has an album with its title, holding its illustrations (and the covers to choose from)');
+    check(count($album)===1&&$album[0]['count']===4&&$album[0]['kind']==='story'&&$album[0]['story']===$sid&&$album[0]['library']===false,'the story has an album with its title, holding its illustrations (and the covers to choose from)');
+    $inAlbum=array_column($vault->library($key,['album'=>$album[0]['id']])['items'],0);$inLibrary=array_column($vault->library($key,[])['items'],0);
+    check(count($inAlbum)===4&&in_array($imageId,$inAlbum,true)&&!array_intersect($inAlbum,$inLibrary)&&!array_intersect($inAlbum,array_column($vault->library($key,['group'=>true])['items'],0)),'they show only in the album, not in the library');
+    check(!array_diff($inAlbum,array_column($vault->gallery($key,'',false,false,0,300)['items'],'id'))&&$stories->get($sid,$key)['albums']===['book'=>$album[0]['id'],'comic'=>null],'the reference picker still has them, and the story knows its album');
     $stories->update($sid,['title'=>'O Farol de Vidro'],$key);
     check(in_array('O Farol de Vidro',array_column($vault->albums($key),'name'),true),'the album follows the story\'s title');
     $stories->update($sid,['title'=>$title],$key);
@@ -337,6 +340,7 @@ try{
     $jobs->run($editJob,$key,$api);
     $page=$stories->get($sid,$key,$jobs);
     check(preg_match('/!\[O barco, em foto\]\(img:([a-f0-9]{32})\)/',$page['chapters'][1]['text'],$m)===1&&$m[1]!==$imageId&&$page['editing']===[],'when it is ready, the new version takes the old one\'s place, with the new caption');
+    check(in_array($m[1],array_column($vault->library($key,['album'=>$album[0]['id']])['items'],0),true)&&!in_array($m[1],array_column($vault->library($key,[])['items'],0),true),'the new version goes into the story\'s album, out of the library');
     $imageId=$m[1];
     [$ok,$out]=$writer->runTool('edit_illustration',['image_id'=>$imageId,'kind'=>'upscale'],$ctx);
     $editJob=end($ctx->jobs);

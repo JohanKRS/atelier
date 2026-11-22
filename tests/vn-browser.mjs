@@ -259,6 +259,24 @@ await page.waitForFunction(() => location.hash === '#vn');
 await page.locator('.story-card', { hasText: 'Nova visual novel' }).waitFor();
 pass('each section lists its own kind; going back returns to the visual novels');
 
+// The project's album: the button by the cover opens it, under Visual novels, with the background made; out of the library
+await page.locator('.story-card', { hasText: 'Nova visual novel' }).click();
+await page.locator('#story-album').click();
+await page.locator('.workspace').waitFor();
+await page.waitForFunction(() => document.querySelectorAll('#feed .tile[data-id]').length > 0 && location.hash === '', null, { timeout: 10000 });
+assert.match(await page.locator('#scope-button').textContent(), /Nova visual novel/);
+const vnPictures = await page.locator('#feed .tile[data-id]').evaluateAll(tiles => tiles.map(t => t.dataset.id));
+const library = await page.evaluate(async () => (await (await fetch('index.php?action=library&group=0&sort=newest', { cache: 'no-store' })).json()).items.map(r => r[0]));
+assert.deepEqual(library.filter(id => vnPictures.includes(id)), [], 'the art is not in the library');
+await page.locator('#scope-button').click();
+assert.ok(await page.locator('#scope-menu .menu-item[aria-checked=true]').first().evaluate(item => {
+  const titles = [...item.parentElement.querySelectorAll('.menu-title')].filter(x => x.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING);
+  return titles.at(-1)?.textContent === 'Visual novels';
+}), 'the project\'s album under its kind');
+await page.locator('#scope-menu .menu-item', { hasText: 'Abrir a visual novel' }).click();
+await page.waitForFunction(id => location.hash === `#vn/${id}`, projectId);
+pass('the project\'s album opens from its contents, under Visual novels, out of the library, and opens the project again');
+
 assert.deepEqual(errors, []);
 await browser.close();
 console.log('Visual novel browser checks passed. No real API calls.');

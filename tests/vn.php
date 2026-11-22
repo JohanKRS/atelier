@@ -230,6 +230,9 @@ try{
     $stories->resolveIllustrations($sid,$key,$jobs);
     $art=$vn->art($sid,$key);
     check(count(array_filter($art['sprites'],fn($x)=>is_string($x['image'])&&$x['job']===null))===2,'the pictures that are ready become the sprites');
+    $vnAlbum=$stories->get($sid,$key)['albums']['book']; $listed=array_column($vault->albums($key),null,'id'); $sprites=array_column($art['sprites'],'image');
+    check($vnAlbum!==null&&$listed[$vnAlbum]['kind']==='vn'&&$listed[$vnAlbum]['library']===false&&!array_diff($sprites,array_column($vault->library($key,['album'=>$vnAlbum])['items'],0))
+        &&!array_intersect($sprites,array_column($vault->library($key,[])['items'],0)),'the sprites go into the project\'s album, a visual novel\'s, out of the library');
     check(Vn::spriteFor($art['sprites'],$art['sprites'][0]['character'],'feliz')['expression']==='feliz'&&Vn::spriteFor($art['sprites'],$art['sprites'][0]['character'],'')['expression']==='neutra'&&Vn::spriteFor($art['sprites'],$art['sprites'][0]['character'],'brava')===null,'the sprite for an expression, the first for none');
     [$ok,$out,$label]=$wi->runTool('make_sprite',['character'=>'Ana','expression'=>'neutra','outfit'=>'pijama','prompt'=>'Pajamas with stars.'],$ctx);
     check($ok&&str_contains($jobOf(end($ctx->jobs))['prompt'],'the outfit becomes the pijama outfit')&&!str_contains($jobOf(end($ctx->jobs))['prompt'],', the same outfit,'),'a new outfit is an edit of the base too');

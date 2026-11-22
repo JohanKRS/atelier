@@ -60,7 +60,7 @@ export function createStories(ctx) {
   const comics = ctx.createComics({ api, h, icon, toast, confirmAction, imageUrl, openViewer, trackJob, launchQueued, formatUsd, plural, $,
     story: () => st.story, pending: () => st.pending, chapter: () => st.chapter, writer: () => writerOf(), reload: () => reloadStory(), poll: () => schedule(1500),
     changed: () => renderSide(), prefillChat: text => prefillChat(text), openCast: space => openCast(space), openDocument: name => openDocument(name), credit: ctx.credit, imageSize: ctx.imageSize, hasKey: ctx.hasKey,
-    pickImages: ctx.pickImages, fileName: S.fileName, download: (name, type, content) => download(name, type, content) });
+    pickImages: ctx.pickImages, fileName: S.fileName, download: (name, type, content) => download(name, type, content), openAlbum: id => ctx.openAlbum(id) });
 
   // A visual novel project (vn.js): its tree, scenes, art, routes, variables, preview, documents and the Ren'Py game,
   // in the middle pane, with the contents and the chat around it as in a story.
@@ -401,6 +401,7 @@ export function createStories(ctx) {
         h('button', { type: 'button', class: 'icon-btn small', title: t('All stories'), 'aria-label': t('All stories'), onclick: leaveStory }, icon('back')),
         h('span', { class: 'grow' }),
         h('button', { type: 'button', class: 'icon-btn small', title: t('Cover: choose, generate or edit'), 'aria-label': t('Cover'), onclick: () => openCover(st.story) }, icon('image')),
+        albumButton(s, t('The story\'s album: its covers, illustrations and sheets')),
         h('button', { type: 'button', class: 'icon-btn small', title: t('Download'), 'aria-label': t('Download'), onclick: exportMenu }, icon('download')),
         h('button', { type: 'button', class: 'icon-btn small danger', title: t('Delete the story'), 'aria-label': t('Delete the story'), onclick: deleteStory }, icon('trash'))),
       h('button', { type: 'button', class: 'story-title', title: t('Edit title, series and synopsis'), onclick: openDetails },
@@ -426,6 +427,10 @@ export function createStories(ctx) {
         h('button', { type: 'button', class: 'side-doc spoiler', onclick: () => openDocument('plan') }, icon('eye-off'), h('span', {}, h('strong', { text: t('Planning') }), h('small', { text: s.plan.words ? plural(s.plan.words, t('{n} word · hidden (spoilers)'), t('{n} words · hidden (spoilers)')) : t('Empty: the writer plans before the 1st chapter') })))));
     if (moving) (side.querySelector(`[data-move="${CSS.escape(moving)}"]:not(:disabled)`) || side.querySelector(`[data-move^="${CSS.escape(moving.split(':')[0])}:"]:not(:disabled)`))?.focus();
   }
+  /** The album of the story's pictures, which stay out of the library: there once the first one is made. */
+  function albumButton(s, title) {
+    return s.albums?.book ? h('button', { type: 'button', class: 'icon-btn small', id: 'story-album', title, 'aria-label': t('Album'), onclick: () => ctx.openAlbum(s.albums.book) }, icon('album')) : null;
+  }
   /**
    * The contents of a visual novel project: the scenes by chapter (a chapter opens its base text), the problems the
    * checks found, and the project's documents.
@@ -442,6 +447,7 @@ export function createStories(ctx) {
         h('button', { type: 'button', class: 'icon-btn small', title: t('All visual novels'), 'aria-label': t('All visual novels'), onclick: leaveStory }, icon('back')),
         h('span', { class: 'grow' }),
         h('button', { type: 'button', class: 'icon-btn small', title: t('Cover: choose, generate or edit'), 'aria-label': t('Cover'), onclick: () => openCover(st.story) }, icon('image')),
+        albumButton(s, t('The visual novel\'s album: its sprites, backgrounds, CGs, covers and sheets')),
         h('button', { type: 'button', class: 'icon-btn small', title: t('Download (Ren\'Py, project zip)'), 'aria-label': t('Download'), onclick: exportMenu }, icon('download')),
         h('button', { type: 'button', class: 'icon-btn small danger', title: t('Delete the project'), 'aria-label': t('Delete the project'), onclick: deleteStory }, icon('trash'))),
       h('button', { type: 'button', class: 'story-title', title: t('Edit title, series and synopsis'), onclick: openDetails },
@@ -1772,8 +1778,8 @@ export function createStories(ctx) {
   async function deleteStory() {
     const s = st.story;
     const ok = await confirmAction({ title: t('Delete “{title}”?', { title: s.title || t('Untitled') }), confirm: t('Delete'), danger: true,
-      message: isVn(s) ? t('The scenes, the tree, the variables, the routes, the gameplay notes, the chapters, the design document and the conversation with the writer are deleted for good. The sprites, backgrounds and CGs stay in the gallery.')
-        : t('The chapters, the bible, the plan and the conversation with the writer are deleted for good. The illustrations stay in the gallery.') });
+      message: isVn(s) ? t('The scenes, the tree, the variables, the routes, the gameplay notes, the chapters, the design document and the conversation with the writer are deleted for good. The sprites, backgrounds and CGs stay in the project\'s album, in the gallery.')
+        : t('The chapters, the bible, the plan and the conversation with the writer are deleted for good. The covers, illustrations and comic pages stay in the story\'s albums, in the gallery.') });
     if (!ok) return;
     try { await api('story-delete', { id: s.id }); st.list = st.list.filter(x => x.id !== s.id); toLeave(); toast(isVn(s) ? t('Project deleted.') : t('Story deleted.')); }
     catch (e) { toast(e.message, { tone: 'error' }); }
@@ -1922,7 +1928,7 @@ export function createStories(ctx) {
       const { pack, conversation, pictures } = P.readPack(await P.unzip(file), file.name);
       const olds = [...new Set([...pictures.values()].map(p => p.old).filter(Boolean))];
       const have = new Set(olds.length ? (await api('story-import-images', { ids: olds })).have : []);
-      const ids = new Map(), images = {};
+      const ids = new Map(), images = {}, brought = [];
       let failed = 0, n = 0;
       for (const [path, p] of pictures) {
         n++;
@@ -1931,14 +1937,14 @@ export function createStories(ctx) {
         try {
           const blob = await ctx.importableImage(new Blob([p.bytes], { type: p.type }));
           const { image } = await api('import', { data: await ctx.blobData(blob), name: p.title });
-          ids.set(path, image.id);
+          ids.set(path, image.id); brought.push(image.id);
           if (p.old) images[p.old] = image.id;
         } catch { failed++; }
       }
       say(t('Creating the story…'));
       P.withIds(pack, ids);
       const talk = conversation && Array.isArray(conversation.messages) && conversation.messages.length ? conversation : null;
-      const { story, dropped, batch } = await api('story-import', { pack, images, pictures: ids.size > 0,
+      const { story, dropped, batch } = await api('story-import', { pack, images, pictures: brought,
         ...(talk ? { conversation: { current: talk.current, turns: talk.turns, seen: talk.seen, inbox: talk.inbox } } : {}) });
       st.list = [story, ...st.list.filter(x => x.id !== story.id)];
       if (!st.story) renderList();

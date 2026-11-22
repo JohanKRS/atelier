@@ -120,6 +120,8 @@ final class Users
         $db->exec('BEGIN IMMEDIATE');
         try {
             foreach (['stories'=>'user_id','images'=>'user_id','albums'=>'user_id','jobs'=>'user_id','links'=>'user_id','uploads'=>'user_id','spend'=>'user_id','users'=>'id'] as $table => $column) $db->prepare("DELETE FROM $table WHERE $column=?")->execute([$id]);
+            // What the account's upgrades noted (Stories::adoptAlbums).
+            $db->prepare('DELETE FROM settings WHERE name=?')->execute([Stories::ADOPTED.$id]);
             $db->exec('COMMIT');
         } catch (\Throwable $e) { $db->exec('ROLLBACK'); throw $e; }
         foreach ($images as $image) foreach (['full','thumb','video'] as $variant) @unlink($this->vault->dir."/blobs/$image-$variant.enc");

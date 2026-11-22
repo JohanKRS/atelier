@@ -101,8 +101,11 @@ final class Comics
                 $s['style']['images'] = array_values(array_filter($s['style']['images'], fn($im) => $im['image'] !== (string)$ref));
                 if (count($s['style']['images']) === $before) throw new HttpError(422, t('Image {ref} is not in the comic\'s style.', ['ref'=>$ref]));
             }
+            $kind = $this->settings($storyId, $key)['kind'];
             $s['rev'] = (int)$s['rev'] + 1; $s['by'] = $by; $s['at'] = time();
             $this->saveSettings($storyId, $s, $key);
+            // The adaptation's album says its kind (Mangá, HQ, graphic novel) in its name.
+            if ($kind !== $s['kind']) $this->stories->renameAlbums($storyId, $key);
             $this->stories->touch($storyId);
             return $this->settings($storyId, $key);
         });
