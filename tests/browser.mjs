@@ -1769,11 +1769,16 @@ const root = new URL(page.url()).hash.slice(3);
 const editPrompt = await rect('#edit-drop'), inspector = await rect('.inspector'), stage = await rect('#stage'), versions = await rect('#versions-aside');
 assert.ok(Math.abs(editPrompt.x - composerPrompt.x) < 1 && Math.abs(editPrompt.width - composerPrompt.width) < 1, 'the prompt box is in the same place, with the same width, on both screens');
 assert.ok(inspector.x === 0 && inspector.right <= stage.x + 1 && versions.x >= stage.right - 1 && Math.abs(versions.right - 1440) < 1, 'edit panel on the left, picture in the middle, versions on the right');
-// The buttons are a grid of equal cells under the box.
+// The buttons are a grid under the box, in two groups: the four helpers of a plain edit on top, smaller, then the
+// requests in two rows of three. Every row is full.
 const tools = page.locator('#edit-form .tools .tool');
-assert.deepEqual((await tools.allTextContents()).map(t => t.trim()), ['Área', 'Arquivo', 'Galeria', 'Variações', 'Ampliar', 'Expandir', 'Fotorrealista', 'Melhorar', 'Limpar']);
+assert.deepEqual((await tools.allTextContents()).map(t => t.trim()), ['Área', 'Arquivo', 'Galeria', 'Variações', 'Recortar', 'Expandir', 'Ampliar', 'Fotorrealista', 'Melhorar', 'Limpar']);
 const cells = await tools.evaluateAll(list => list.map(b => { const r = b.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)]; }));
-assert.deepEqual([new Set(cells.map(c => c[0])).size, new Set(cells.map(c => c[1])).size, new Set(cells.map(c => `${c[2]} × ${c[3]}`)).size], [3, 3, 1], 'three columns, three rows, every button the same size');
+const toolRows = [cells.slice(0, 4), cells.slice(4, 7), cells.slice(7)];
+assert.deepEqual([...toolRows.map(r => new Set(r.map(c => c[1])).size), new Set(cells.map(c => c[1])).size], [1, 1, 1, 3], 'three rows: 4, 3 and 3 buttons');
+assert.deepEqual([new Set(cells.slice(0, 4).map(c => `${c[2]} × ${c[3]}`)).size, new Set(cells.slice(4).map(c => `${c[2]} × ${c[3]}`)).size], [1, 1], 'the helpers are one size, the requests another');
+assert.ok(cells[0][2] < cells[4][2] && cells[0][3] === cells[4][3], 'the four helpers are narrower, and as tall');
+assert.ok(toolRows.every(r => Math.abs(r[0][0] - cells[0][0]) <= 1 && Math.abs(r.at(-1)[0] + r.at(-1)[2] - (cells[3][0] + cells[3][2])) <= 1), 'every row is full, edge to edge');
 assert.ok(cells[0][1] >= Math.floor(editPrompt.bottom), 'the buttons are under the box');
 assert.equal(await page.locator('#edit-drop button').count(), 0, 'no button inside the prompt box');
 // Nothing is drawn over the picture while it is only being looked at; its size is written under it.
@@ -1954,6 +1959,95 @@ assert.deepEqual([request.operation, request.parent_id, request.references[0].so
 assert.match(request.prompt, /^Expand the image by filling only the transparent areas.* Instructions for the new areas: mais céu$/);
 assert.match(request.mask, /^data:image\/png;base64,/);
 assert.equal(await page.locator('#stage-meta').textContent(), `${frame.width} × ${frame.height}`);
+// Recortar: a step of its own. Its frame stays inside the image (pulled outward, a side stops at the edge), a
+// proportion takes the largest frame of that shape, nothing goes to the image API, and the cropped image opens, ready
+// to be edited or expanded (an expansion then never sees what was cut off).
+const expanded = new URL(page.url()).hash.slice(3), [ew, eh] = [frame.width, frame.height];
+await page.locator('#edit-prompt').fill('');
+await page.locator('#crop-open').click();
+await page.locator('#expand-options').waitFor();
+await page.waitForTimeout(250);
+assert.deepEqual([await page.locator('#action-title').textContent(), await page.locator('#expand-ratio-field').isVisible(), await page.locator('#expand-engine').isHidden(), await page.locator('#edit-prompt').isDisabled(), await page.locator('#edit-more').isHidden()],
+  ['Recortar', true, true, true, true]);
+frame = await frameState();
+assert.deepEqual([frame.width, frame.height, frame.off, frame.go, frame.cost, frame.says], [ew, eh, true, 'Recortar', 'Sem custo: o recorte é feito neste aparelho.', 'A moldura pega a imagem inteira: puxe as alças para dentro ou escolha uma proporção.'], 'Recortar starts on the whole image');
+await dragHandle('w', -120, 0);
+frame = await frameState();
+assert.deepEqual([frame.width, frame.height, frame.off], [ew, eh, true], 'pulled outward, a side stays on the edge of the image');
+await dragHandle('e', -150, 0);
+frame = await frameState();
+assert.ok(frame.width < ew, `the right side is cut off (${frame.width} × ${frame.height})`);
+assert.deepEqual([frame.height, frame.go, frame.off, frame.says], [eh, 'Recortar', false, 'O que fica fora da moldura sai. A imagem recortada abre como nova versão.']);
+const cropFrameBox = await rect('#expand-frame'), cropStageBox = await rect('#expand-stage');
+assert.ok(cropFrameBox.width > cropStageBox.width * 0.4 || cropFrameBox.height > cropStageBox.height * 0.6, 'let go, the frame is fitted to the stage again');
+await page.locator('#expand-ratios [data-crop="1:1"]').click();
+await page.waitForTimeout(250);
+frame = await frameState();
+const side = Math.min(ew, eh);
+assert.deepEqual([frame.width, frame.height, await page.locator('#expand-ratios [aria-pressed="true"]').textContent()], [side, side, '1:1']);
+await shot('crop-tool-desktop.png');
+const sentBeforeTool = creations.length;
+await page.locator('#edit-submit').click();
+await versionLabel('v15 de 15');
+assert.equal(creations.length, sentBeforeTool, 'a crop sends nothing to the image API');
+assert.equal(await page.locator('#stage-meta').textContent(), `${side} × ${side}`);
+assert.notEqual(new URL(page.url()).hash.slice(3), expanded, 'the cropped image is open');
+assert.deepEqual([await page.locator('#action-panel').isHidden(), await page.locator('#crop-open').getAttribute('aria-pressed'), await page.locator('#edit-prompt').isDisabled()], [true, 'false', false], 'the crop is done: the image is ready to be edited');
+assert.equal(await page.locator('#versions-list .vnode.current .vsub').textContent(), `Recorte para ${side} × ${side}`);
+// Cobrir: the painted area goes erased, so the model can't see what was there. Without text it is filled with what
+// surrounds it; with text, it is drawn from the text. On the picture a covered area is solid, not a veil.
+const beforeCover = new URL(page.url()).hash.slice(3);
+await page.locator('#brush-toggle').click();
+await page.locator('#brush-bar').waitFor();
+assert.equal(await page.locator('#mask-cover').getAttribute('aria-pressed'), 'false', 'the brush starts by marking');
+const coverArea = await page.locator('#mask-canvas').boundingBox();
+await page.mouse.move(coverArea.x + coverArea.width * 0.3, coverArea.y + coverArea.height * 0.3); await page.mouse.down();
+await page.mouse.move(coverArea.x + coverArea.width * 0.42, coverArea.y + coverArea.height * 0.38, { steps: 8 }); await page.mouse.up();
+assert.equal(await page.locator('#mask-canvas').evaluate(c => getComputedStyle(c).opacity), '0.55', 'a marked area is a veil');
+await page.locator('#mask-cover').click();
+assert.deepEqual([await page.locator('#mask-cover').getAttribute('aria-pressed'), await page.locator('#mask-go').textContent(), await page.locator('#brush-hint').textContent()], ['true', 'Preencher área', 'Pinte o que a IA não deve ver']);
+assert.equal(await page.locator('#mask-canvas').evaluate(c => getComputedStyle(c).opacity), '1', 'a covered area hides what is under it');
+await shot('cover-desktop.png');
+await page.locator('#mask-done').click();
+assert.deepEqual([await page.locator('#mask-chip-text').textContent(), await page.locator('#edit-submit-label').textContent(), await page.locator('#edit-prompt').getAttribute('placeholder')],
+  ['Só a área coberta', 'Preencher área', 'O que deve aparecer na área coberta (opcional). Em branco, ela é preenchida com o que está em volta.']);
+assert.equal(await page.locator('#mask-canvas').evaluate(c => getComputedStyle(c).opacity), '1', 'and stays hidden while the request is written');
+// The alpha of the image sent, inside the painted area and far from it.
+const sentAlpha = data => page.evaluate(async data => {
+  const image = new Image(); image.src = data; await image.decode();
+  const c = document.createElement('canvas'); c.width = image.naturalWidth; c.height = image.naturalHeight;
+  const g = c.getContext('2d'); g.drawImage(image, 0, 0);
+  return [[0.31, 0.31], [0.9, 0.9]].map(([x, y]) => g.getImageData(Math.floor(x * c.width), Math.floor(y * c.height), 1, 1).data[3]);
+}, data);
+await forgetToast();
+await page.locator('#edit-submit').click();
+await page.waitForFunction(() => document.querySelector('#toast-text').textContent === 'Edição pronta.', null, { timeout: 20000 });
+request = creations.at(-1);
+assert.deepEqual([request.operation, request.parent_id, request.label, request.options.thinking, request.references.length, request.references[0].source_id, 'id' in request.references[0]],
+  ['edit', beforeCover, 'Área coberta preenchida', 'off', 1, beforeCover, false]);
+assert.match(request.prompt, /^The area marked by the mask was erased on purpose before sending: it is empty .*Fill it with what naturally belongs there/s);
+assert.match(request.mask, /^data:image\/png;base64,/);
+assert.match(request.references[0].data, /^data:image\/png;base64,/);
+assert.deepEqual(await sentAlpha(request.references[0].data), [0, 255], 'the image goes with the painted area erased, and the rest as it is');
+await page.locator('#edit-prompt').fill('um gato dormindo');
+await forgetToast();
+await page.locator('#edit-submit').click();
+await page.waitForFunction(() => document.querySelector('#toast-text').textContent === 'Edição pronta.', null, { timeout: 20000 });
+request = creations.at(-1);
+assert.deepEqual([request.typed, request.label], ['um gato dormindo', 'Área coberta: um gato dormindo']);
+assert.match(request.prompt, /^The area marked by the mask was erased on purpose before sending.*\n\nRequest: um gato dormindo$/s);
+assert.deepEqual(await sentAlpha(request.references[0].data), [0, 255]);
+await openResult('Edição pronta.', 'v17 de 17');
+assert.match(await page.locator('#versions-list .vnode.current .vsub').textContent(), /^Área coberta: um gato dormindo/);
+// Cobrir is remembered; off again, the brush marks.
+await page.locator('#edit-prompt').fill('');
+await page.locator('#brush-toggle').click();
+assert.equal(await page.locator('#mask-cover').getAttribute('aria-pressed'), 'true', 'Cobrir is remembered');
+await page.locator('#mask-cover').click();
+assert.deepEqual([await page.locator('#mask-go').textContent(), await page.locator('#brush-hint').textContent()], ['Refazer área', 'Pinte o que deve ser refeito']);
+await page.locator('#mask-clear').click();
+await page.locator('#brush-toggle').click();
+assert.deepEqual(await overPicture(), [true, true, true, true, true]);
 // The arrow keys move a focused handle, and Esc leaves the tool without leaving the viewer.
 await page.locator('#edit-prompt').fill('');
 await page.locator('#expand-open').click();

@@ -1,7 +1,7 @@
 import { t, language, locale, number } from './i18n.js';
 // The other modules load with this file's version, so a new upload never mixes old and new code behind a cache.
 const assetVersion = new URL(import.meta.url).search;
-const [{ snap16, frameKind, keptArea, validateFrame, frameTooLarge, resizeFrame, panFrame, sizeFrame, centerFrame, frameView, API_LIMITS, GPU_LIMITS }, { versionNumbers, buildTree, branches, forkDepth, validSize, editSize, aspectOf, upscaleSizes },
+const [{ snap16, frameKind, keptArea, validateFrame, frameTooLarge, resizeFrame, panFrame, sizeFrame, centerFrame, ratioFrame, hasRatio, resizeCrop, holdCrop, frameView, API_LIMITS, GPU_LIMITS }, { versionNumbers, buildTree, branches, forkDepth, validSize, editSize, aspectOf, upscaleSizes },
   { estimate, usageCost, formatUsd, PRICING_CHECKED, GEMINI_PRICING_CHECKED, isGemini, setAliases, UNKNOWN_IMAGE, balanceNow, formatBalance, planningCost, planningAverage, learnedScale }, { mp4Timing, snapFps, fpsLabel, frameAt, frameTime, frameCount, timecode, megabytes, COMMON_RATES },
   { justify, firstRowAt, monthMarks, railMarks }, { strips }, storyHelpers, { createStories }, readerModule, { createComics, zip }, packModule, { createVn }, { createGpu, aspectRatio }] =
   await Promise.all(['outpaint', 'lineage', 'pricing', 'video', 'library', 'clean', 'story', 'stories', 'reader', 'comics', 'pack', 'vn', 'gpu'].map(name => import(`./${name}.js${assetVersion}`)));
@@ -26,6 +26,7 @@ const ICONS = {
   upload: '<path d="M12 15V4.5M7.5 9 12 4.5 16.5 9M5 19.5h14"/>',
   trash: '<path d="M4.5 7h15M9.5 7V5.2c0-.7.5-1.2 1.2-1.2h2.6c.7 0 1.2.5 1.2 1.2V7M6.5 7l.8 11.6c.1 1 .9 1.9 2 1.9h5.4c1.1 0 1.9-.9 2-1.9L17.5 7M10 11v5.5M14 11v5.5"/>',
   brush: '<path d="M20 4.2c-.5-.5-1.4-.5-1.9 0L10.4 12l1.8 1.8 7.8-7.7c.5-.5.5-1.4 0-1.9z"/><path d="M9.6 13.2c-1.9-.3-3.6 1-3.8 3-.2 1.4-.9 2.4-2.3 2.8 3.6 1.4 7.8.4 8.1-3.7"/>',
+  crop: '<path d="M6.5 2.5v13a2 2 0 0 0 2 2h13"/><path d="M2.5 6.5h13a2 2 0 0 1 2 2v13"/>',
   expand: '<path d="M4 9V5.5C4 4.7 4.7 4 5.5 4H9M15 4h3.5c.8 0 1.5.7 1.5 1.5V9M20 15v3.5c0 .8-.7 1.5-1.5 1.5H15M9 20H5.5C4.7 20 4 19.3 4 18.5V15"/><rect x="8.5" y="8.5" width="7" height="7" rx="1.2"/>',
   upscale: '<path d="M4 20l6.5-6.5M4 14.5V20h5.5"/><path d="M13 4h7v7"/><path d="M20 4l-6.5 6.5"/>',
   pencil: '<path d="M4.5 19.5h3.8L18.6 9.2a2.7 2.7 0 0 0-3.8-3.8L4.5 15.7z"/><path d="m13.5 6.7 3.8 3.8"/>',
@@ -140,6 +141,10 @@ const OPERATION = { generate: 'Original', import: t('Imported'), edit: t('Edit')
 const EXPAND_PROMPT = 'Expand the image by filling only the transparent areas outside the original image. Preserve the elements, framing, details and colors of the original region. Continue the scene, lighting, perspective and textures naturally, with no borders, seams or repeated objects.';
 // A marked area sent with nothing written: the area is made again as a correct version of itself. Names no kind of image.
 const INPAINT_PROMPT = `Redo only the area marked by the mask, and nothing else. Generate that area again as a clean, correct and natural version of what it shows: the same subject and elements, in the same place, pose and size, fixed wherever they are malformed, distorted, garbled, smudged or damaged (for example hands and fingers, faces, eyes, teeth, lettering, warped objects, broken textures, seams and artifacts). It must blend seamlessly with the rest of the picture: the same style, light, colors, perspective, focus and texture, with no visible border. Do not add new objects, do not remove what the area shows and do not change its meaning. Everything outside the marked area stays exactly as it is.`;
+// Cobrir: the area goes erased (transparent; Gemini sees it flat gray), so the model can't see what was there. With text,
+// the area is drawn from it; without, it is filled with what surrounds it, as if what was there had never been.
+const COVER_NOTE = 'The area marked by the mask was erased on purpose before sending: it is empty (transparent, or flat gray), so nothing of what was there should be guessed, kept or rebuilt. Draw that area anew following the request below, so that it blends seamlessly with the rest of the picture: the same style, light, colors, perspective, focus and texture, with no visible border. Everything outside the marked area stays exactly as it is.\n\nRequest: ';
+const FILL_PROMPT = 'The area marked by the mask was erased on purpose before sending: it is empty (transparent, or flat gray). Fill it with what naturally belongs there, continuing the surroundings (background, surfaces, light, perspective and textures), so that it looks as if whatever was there had never been in the picture. Do not add new objects or people, and leave no outline, seam or placeholder. Everything outside the marked area stays exactly as it is.';
 const UPSCALE_PROMPT = 'Recreate this same image at a higher resolution. Preserve exactly the composition, framing, proportions, colors, lighting, faces, text and every element in the same positions. Make the image clean and well defined, with smooth transitions, and remove noise, grain, specks, jagged edges and compression artifacts, without inventing new texture. Do not add, remove or reinterpret anything.';
 const FORMAT_OF_MIME = { 'image/png': 'png', 'image/jpeg': 'jpeg', 'image/webp': 'webp' };
 const PREFS_KEY = 'imagegen.prefs.v1';
@@ -2825,7 +2830,7 @@ async function openViewer(id, { history: mode = 'push', at = null, immersive = f
 function closeViewer() { if (viewerDialog.open) viewerDialog.close(); }
 /** Another image is about to show: Ampliar, Expandir and the brush were about the one before. Fotorrealista, Melhorar and Limpar stay chosen. */
 function leaveStageMode() {
-  if (viewer.action === 'expand' || viewer.action === 'upscale') setAction(null);
+  if (viewer.action === 'expand' || viewer.action === 'crop' || viewer.action === 'upscale') setAction(null);
   else if (viewer.mode !== 'view') setMode('view');
 }
 viewerDialog.addEventListener('cancel', e => {
@@ -3556,16 +3561,16 @@ function updateEditCost() {
   const item = viewer.item; if (!item) return;
   const action = viewer.action;
   if (action === 'upscale') { updateUpscaleCost(); return; }
-  if (action === 'expand') { updateExpandCost(); return; }
+  if (action === 'expand' || action === 'crop') { updateExpandCost(); return; }
   if (action === 'clean') { const note = $('#edit-cost'); note.hidden = false; note.textContent = t('No cost: the cleanup runs on this device.'); note.title = ''; return; }
   const o = editOptions(item);
   // A ready-made request goes as written (no planning) and takes only the image itself.
   if (action) showCost('#edit-cost', { model: o.model, quality: o.quality, size: o.size, n: o.n, previews: o.previews, planning: [],
     inputs: [[item.width, item.height]], promptLength: withNotes(ACTIONS[action].prompt, boxNotes()).length });
   else {
-    const redo = viewer.maskPainted && !$('#edit-prompt').value.trim();
+    const redo = viewer.maskPainted && !$('#edit-prompt').value.trim(), cover = viewer.maskPainted && brushCovers();
     showCost('#edit-cost', { model: o.model, quality: o.quality, size: o.size, n: o.n, previews: o.previews, planning: redo ? [] : planningCalls(o, varyForms.edit.mode === 'auto' && o.n > 1),
-      inputs: [[item.width, item.height], ...viewer.refs.map(refSize)], promptLength: redo ? INPAINT_PROMPT.length : $('#edit-prompt').value.length });
+      inputs: [[item.width, item.height], ...viewer.refs.map(refSize)], promptLength: redo ? (cover ? FILL_PROMPT : INPAINT_PROMPT).length : (cover ? COVER_NOTE.length : 0) + $('#edit-prompt').value.length });
   }
 }
 function persistEdit() {
@@ -3619,9 +3624,9 @@ $('#edit-form').onsubmit = async e => {
   if (action === 'clean') { await submitClean($('#edit-submit')); return; }
   // A crop is made on this device, like Limpar: it needs no API key. The GPU's models need the worker token instead.
   const using = action === 'expand' ? $('#expand-model').value : action === 'upscale' ? $('#upscale-model').value : $('#edit-model').value;
-  if (needsKey(using) && !(action === 'expand' && expansionKind() === 'crop')) { showSettings(); return; }
+  if (needsKey(using) && !(action === 'crop' || (action === 'expand' && expansionKind() === 'crop'))) { showSettings(); return; }
   if (action) {
-    const sent = action === 'upscale' ? await submitUpscale() : action === 'expand' ? await submitExpansion() : await submitPreset(action);
+    const sent = action === 'upscale' ? await submitUpscale() : action === 'expand' ? await submitExpansion() : action === 'crop' ? await submitCrop(true) : await submitPreset(action);
     // Sent: the request stays chosen. The result of Fotorrealista or Melhorar opens when it is ready, and they stay chosen
     // there; Ampliar and Expandir are about the image on the stage, so they stay on it and a message offers the result.
     if (sent) { viewer.editTyped = false; renderVersions(); }
@@ -3638,12 +3643,16 @@ $('#edit-form').onsubmit = async e => {
   if (linesError) { setError('#edit-error', linesError); $('#edit-vary-lines').focus(); return; }
   const button = $('#edit-submit'); button.disabled = true;
   try {
-    const mask = viewer.maskPainted ? buildMask() : null;
+    const mask = viewer.maskPainted ? buildMask() : null, cover = !!mask && brushCovers();
     // The ready-made instruction goes as written, like Fotorrealista and Melhorar: no planning, every image the same request.
-    const request = redo ? { prompt: INPAINT_PROMPT, label: t('Area redone'), options: { ...editOptions(item), thinking: 'off', vary: false } } : { prompt, options: editOptions(item) };
+    const ready = { options: { ...editOptions(item), thinking: 'off', vary: false } };
+    const request = redo ? (cover ? { ...ready, prompt: FILL_PROMPT, label: t('Covered area filled') } : { ...ready, prompt: INPAINT_PROMPT, label: t('Area redone') })
+      : cover ? { prompt: COVER_NOTE + prompt, typed: prompt, label: t('Covered area: {text}', { text: prompt.replace(/\s+/g, ' ') }), options: editOptions(item) }
+      : { prompt, options: editOptions(item) };
     // With an area marked the image goes as it is, never cleaned first: what is outside the area comes back as it was
-    // sent, so a cleaned image would come back soft all over.
-    await submitJob({ ...request, references: [mask ? { id: item.id } : await sourceReference(item), ...refsPayload(viewer.refs)], mask, parent_id: item.id, operation: 'edit', ...(lines ? { lines } : {}) });
+    // sent, so a cleaned image would come back soft all over. A covered area goes erased (coveredReference).
+    const source = cover ? await coveredReference(item) : mask ? { id: item.id } : await sourceReference(item);
+    await submitJob({ ...request, references: [source, ...refsPayload(viewer.refs)], mask, parent_id: item.id, operation: 'edit', ...(lines ? { lines } : {}) });
     viewer.editTyped = false;
     persistEdit();
     // The request now shows up in the version tree. A painted area stays, to send again; the result is offered by a
@@ -3895,6 +3904,11 @@ const ACTIONS = {
     empty: t('If you want to ask for an improvement, write it in the box above.'),
     // With Fotorrealista the text goes as its notes, with priority (upscalePrompt).
     filled: () => upscaleWith() === 'photoreal' ? t('The text in the box goes along as a note for Photoreal and has priority, even if it changes something.') : t('The text in the box goes along as a requested improvement.') },
+  // Recortar: a frame inside the image keeps only a part of it, made on this device. The cropped image opens, to be
+  // edited or expanded from there (an expansion then never sees what was cut off).
+  crop: { tile: '#crop-open', local: true, icon: 'crop', title: t('Crop', { ctx: 'action' }), go: t('Crop', { ctx: 'action' }), quality: false, quantity: false,
+    hint: t('Keep only a part of the image: pull the frame\'s handles or pick a proportion, and drag the image to place it. Made on this device, at no cost; the cropped image opens as a new version, ready to edit or expand.'),
+    placeholder: t('A crop does not use text'), empty: '', filled: t('A crop does not use the text in the box.') },
   // The frame crops, extends, or both (outpaint.js): the button and what the text does follow what the frame is doing.
   expand: { tile: '#expand-open', icon: 'expand', title: t('Crop and expand'), quality: false, quantity: false,
     go: () => ({ crop: t('Crop', { ctx: 'action' }), both: t('Crop and expand') })[expansionKind()] || t('Expand'),
@@ -3919,7 +3933,7 @@ const EDIT_ONLY_TOOLS = ['#brush-toggle', '#edit-file-open', '#edit-gallery-refs
 function setAction(name) {
   name = name || null;
   // The frame of Expandir is drawn from the picture on the stage: the open version, never the one it is compared with.
-  if (name === 'expand' && viewer.compare) {
+  if ((name === 'expand' || name === 'crop') && viewer.compare) {
     const token = viewer.token;
     $('#compare').onclick().then(() => { if (viewer.token === token && !viewer.compare) setAction(name); });
     return;
@@ -3928,8 +3942,9 @@ function setAction(name) {
   viewer.action = name;
   setError('#edit-error');
   // Ampliar and Expandir also change what the stage shows; an area being marked belongs to a plain edit.
-  const stage = name === 'expand' || name === 'upscale' ? name : !name && viewer.mode === 'mask' ? 'mask' : 'view';
+  const stage = name === 'expand' || name === 'crop' ? 'expand' : name === 'upscale' ? 'upscale' : !name && viewer.mode === 'mask' ? 'mask' : 'view';
   if (viewer.mode !== stage) setMode(stage);
+  else if (stage === 'expand' && viewer.expansion && viewer.expansion.crop !== (name === 'crop')) startExpansion();
   renderAction();
   if (name && !ACTIONS[name].local && !matchMedia('(pointer: coarse)').matches) $('#edit-prompt').focus({ preventScroll: true });
 }
@@ -3938,8 +3953,10 @@ function renderBox() {
   const box = $('#edit-prompt'), a = ACTIONS[viewer.action], filled = !!box.value.trim();
   $('#edit-clear').hidden = !box.value;
   const said = value => (typeof value === 'function' ? value() : value);
-  box.placeholder = a ? a.placeholder : viewer.maskPainted ? t('What should appear in the marked area (optional). Left blank, that part is redone.') : REF_TARGETS.edit.placeholder[viewer.refs.length ? 1 : 0];
-  if (!$('#edit-submit').disabled || !a?.local) $('#edit-submit-label').textContent = a ? said(a.go) : viewer.maskPainted ? t('Redo area') : t('Generate edit');
+  const cover = brushCovers();
+  box.placeholder = a ? a.placeholder : viewer.maskPainted ? (cover ? t('What should appear in the covered area (optional). Left blank, it is filled with what surrounds it.') : t('What should appear in the marked area (optional). Left blank, that part is redone.')) : REF_TARGETS.edit.placeholder[viewer.refs.length ? 1 : 0];
+  if (!$('#edit-submit').disabled || viewer.action !== 'clean') $('#edit-submit-label').textContent = a ? said(a.go) : viewer.maskPainted ? (cover ? t('Fill area') : t('Redo area')) : t('Generate edit');
+  renderBrushMode(cover);
   if (!a) return;
   const note = said(filled ? a.filled : a.empty);
   $('#action-note').textContent = note;
@@ -3958,13 +3975,13 @@ function renderAction() {
   $('#edit-more').hidden = !!a?.local;
   $('#edit-quantity').hidden = !!a && !a.quantity;
   box.disabled = !!a?.local;
-  $('#edit-submit').disabled = name === 'upscale' ? !viewer.upscale : name === 'expand' ? !viewer.expansion || !!expansionError() : false;
+  $('#edit-submit').disabled = name === 'upscale' ? !viewer.upscale : name === 'expand' || name === 'crop' ? !viewer.expansion || !!expansionError() : false;
   $('#action-panel').hidden = !a;
   if (a) {
     $('#action-icon').replaceChildren(icon(a.icon)); $('#action-title').textContent = a.title; $('#action-hint').textContent = a.hint;
-    $('#preset-before').hidden = !a.before; $('#preset-levels').hidden = !a.local;
-    $('#upscale-options').hidden = name !== 'upscale'; $('#expand-options').hidden = name !== 'expand';
-    if (a.local) renderCleanLevel();
+    $('#preset-before').hidden = !a.before; $('#preset-levels').hidden = name !== 'clean';
+    $('#upscale-options').hidden = name !== 'upscale'; $('#expand-options').hidden = name !== 'expand' && name !== 'crop';
+    if (name === 'clean') renderCleanLevel();
   }
   renderBox(); renderVary('edit'); updateEditCost();
 }
@@ -4011,8 +4028,9 @@ function setMode(mode) {
   if (mode !== 'upscale') viewer.upscale = null;
   renderBox();
   if (mode !== previous && viewerDialog.open) fitStage();
-  // On a phone or a tablet the button is under the picture: the picture comes back to the screen to be painted.
-  if (mode === 'mask' && previous !== 'mask' && viewerDialog.open && matchMedia(STACKED).matches) $('.viewer-shell').scrollTo({ top: 0 });
+  // On a phone or a tablet the panel is under the picture: the picture comes back to the screen to be painted, or for
+  // the frame of Recortar and Expandir to be dragged.
+  if ((mode === 'mask' || mode === 'expand') && previous !== mode && viewerDialog.open && matchMedia(STACKED).matches) $('.viewer-shell').scrollTo({ top: 0 });
 }
 $('#brush-toggle').onclick = () => setMode(viewer.mode === 'mask' ? 'view' : 'mask');
 $('#mask-done').onclick = () => { setMode('view'); if (viewer.maskPainted) $('#edit-prompt').focus(); };
@@ -4020,10 +4038,59 @@ $('#mask-clear').onclick = () => { maskCtx.clearRect(0, 0, maskCanvas.width, mas
 // Paint and send from the same place: the area is made again, following the text of the box when there is some.
 $('#mask-go').onclick = () => { if (!viewer.maskPainted) { toast(t('First paint the area that should be redone.')); return; } $('#edit-form').requestSubmit(); };
 $('#mask-remove').onclick = () => { clearMask(); setMode(viewer.mode === 'mask' ? 'mask' : 'view'); };
+/**
+ * Cobrir, a setting of the brush: off, the area is only marked and the model sees what is in it (it redoes it from that);
+ * on, the area goes erased and the model draws it without seeing what was there. On the picture a covered area is
+ * painted solid with the checkered pattern of what is generated (as in Expandir); a marked one is a light blue veil.
+ */
+const brushCovers = () => state.prefs.brush?.cover === true;
+let coverInk = null;
+function maskInk() {
+  if (!brushCovers()) return '#8fa6ff';
+  // Squares of about 8 screen pixels at the size the picture is shown.
+  const shown = maskCanvas.getBoundingClientRect().width || maskCanvas.width;
+  const unit = Math.max(4, Math.round(8 * maskCanvas.width / shown));
+  if (coverInk?.unit !== unit) {
+    const tile = document.createElement('canvas'); tile.width = tile.height = unit * 2;
+    const g = tile.getContext('2d'); g.fillStyle = '#3a3a42'; g.fillRect(0, 0, unit * 2, unit * 2); g.fillStyle = '#2a2a30'; g.fillRect(0, 0, unit, unit); g.fillRect(unit, unit, unit, unit);
+    coverInk = { unit, pattern: maskCtx.createPattern(tile, 'repeat') };
+  }
+  return coverInk.pattern;
+}
+function renderBrushMode(cover = brushCovers()) {
+  maskCanvas.classList.toggle('cover', cover);
+  $('#mask-cover').setAttribute('aria-pressed', String(cover));
+  $('#brush-hint').textContent = cover ? t('Paint what the AI should not see') : t('Paint what should be redone');
+  $('#mask-go').textContent = cover ? t('Fill area') : t('Redo area');
+  $('#mask-go').title = cover ? t('Generate a new version with the painted area drawn from scratch, without the AI seeing what was there. The text in the box, if any, says what should appear in it; without text, it is filled with what surrounds it. (Ctrl+Enter)')
+    : t('Generate a new version with only the painted area redone. The text in the box, if any, says what should appear in it. (Ctrl+Enter)');
+  $('#mask-chip-text').textContent = cover ? t('Only the covered area') : t('Only the marked area');
+}
+$('#mask-cover').onclick = () => {
+  savePrefs({ brush: { ...state.prefs.brush, cover: !brushCovers() } });
+  // What is already painted takes the new ink: the area stays, only what it does changes.
+  if (viewer.maskPainted) { maskCtx.save(); maskCtx.globalCompositeOperation = 'source-in'; maskCtx.fillStyle = maskInk(); maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height); maskCtx.restore(); }
+  renderBox(); updateEditCost();
+};
+/** The image with the painted area erased (Cobrir): transparent there, so the model can't see what was in it. */
+async function coveredReference(item) {
+  const response = await fetch(imageUrl(item.id));
+  if (!response.ok) throw new Error(t('Could not load the image to cover the area.'));
+  const bitmap = await createImageBitmap(await response.blob());
+  if (bitmap.width !== maskCanvas.width || bitmap.height !== maskCanvas.height) { bitmap.close?.(); throw new Error(t('The painted area does not match this image. Paint it again.')); }
+  const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height;
+  const c = canvas.getContext('2d'); c.drawImage(bitmap, 0, 0); bitmap.close?.();
+  c.globalCompositeOperation = 'destination-out'; c.drawImage(maskCanvas, 0, 0);
+  // The erased area must stay transparent: a PNG, or for a large image a lossless WebP, never a JPEG.
+  let blob = await canvasBlob(canvas, 'image/png');
+  if (!blob || blob.size > CLEANED_LIMIT) { const webp = await canvasBlob(canvas, 'image/webp', 1); if (webp?.type === 'image/webp' && (!blob || webp.size < blob.size)) blob = webp; }
+  if (!blob || blob.size > 14 * 1024 * 1024) throw new Error(t('The image is too large to be sent with a covered area.'));
+  return { data: await blobData(blob), source_id: item.id };
+}
 function maskPoint(e) { const r = maskCanvas.getBoundingClientRect(); return { x: (e.clientX - r.left) * maskCanvas.width / r.width, y: (e.clientY - r.top) * maskCanvas.height / r.height }; }
 function paint(e) {
   const p = maskPoint(e);
-  maskCtx.strokeStyle = maskCtx.fillStyle = '#8fa6ff';
+  maskCtx.strokeStyle = maskCtx.fillStyle = maskInk();
   maskCtx.lineWidth = Number($('#brush-size').value) * maskCanvas.width / maskCanvas.getBoundingClientRect().width;
   maskCtx.lineCap = maskCtx.lineJoin = 'round';
   maskCtx.beginPath(); maskCtx.moveTo(lastPoint?.x ?? p.x, lastPoint?.y ?? p.y); maskCtx.lineTo(p.x, p.y); maskCtx.stroke();
@@ -4079,11 +4146,14 @@ function expansionError() { const e = viewer.expansion; return e ? validateFrame
 function startExpansion() {
   const item = viewer.item; const image = stageImage;
   if (!item || !image.naturalWidth) { viewer.action = null; setMode('view'); return; }
-  const iw = image.naturalWidth, ih = image.naturalHeight;
-  // It starts a quarter larger all around; where that is more than the image API generates, at the size of the image.
+  const iw = image.naturalWidth, ih = image.naturalHeight, crop = viewer.action === 'crop';
+  // Expandir starts a quarter larger all around; where that is more than the image API generates, at the size of the
+  // image. Recortar starts on the whole image.
   let frame = centerFrame({ width: snap16(iw * 1.25), height: snap16(ih * 1.25), x: 0, y: 0 }, iw, ih);
-  if (validateFrame(frame.width, frame.height, frame.x, frame.y, iw, ih)) frame = { width: iw, height: ih, x: 0, y: 0 };
-  viewer.expansion = { image, ...frame, view: null, tween: 0 };
+  if (crop || validateFrame(frame.width, frame.height, frame.x, frame.y, iw, ih)) frame = { width: iw, height: ih, x: 0, y: 0 };
+  viewer.expansion = { image, ...frame, crop, view: null, tween: 0 };
+  $('#expand-ratio-field').hidden = !crop;
+  for (const id of ['#expand-width', '#expand-height']) $(id).step = crop ? 1 : 16;
   const flexible = modelEntries(m => m.flex);
   const preferred = state.prefs.expand?.model || item.options?.model;
   fillSelect($('#expand-model'), flexible, flexible.some(([id]) => id === preferred) ? preferred : DEFAULT_OPTIONS.model);
@@ -4109,14 +4179,19 @@ function fitExpansion(animate) {
   const began = performance.now();
   const step = now => {
     if (viewer.expansion !== e) return;
-    const p = Math.min(1, (now - began) / 160), k = 1 - (1 - p) ** 3;
+    // The time of a frame can come a little before the moment the move began: it starts from where the view is.
+    const p = Math.max(0, Math.min(1, (now - began) / 160)), k = 1 - (1 - p) ** 3;
     e.view = { scale: from.scale + (target.scale - from.scale) * k, x: from.x + (target.x - from.x) * k, y: from.y + (target.y - from.y) * k };
     paintExpansion();
-    if (t < 1) e.tween = requestAnimationFrame(step);
+    if (p < 1) e.tween = requestAnimationFrame(step);
   };
   renderExpansion();
   e.tween = requestAnimationFrame(step);
 }
+const CROP_STATUS = {
+  same: t('The frame takes the whole image: pull its handles inward, or pick a proportion.'),
+  crop: t('What is outside the frame is removed. The cropped image opens as a new version.'),
+};
 const FRAME_STATUS = {
   same: t('The frame is the size of the image: pull a handle inward or outward.'),
   crop: t('Crop only: what is outside the frame is removed, and nothing is generated.'),
@@ -4128,8 +4203,15 @@ function renderExpansion() {
   const e = viewer.expansion; if (!e) return;
   const kind = expansionKind(), error = expansionError();
   $('#expand-width').value = e.width; $('#expand-height').value = e.height;
-  $('#expand-dimensions').textContent = FRAME_STATUS[kind];
-  $('#expand-engine').hidden = kind === 'crop';
+  $('#expand-dimensions').textContent = (e.crop ? CROP_STATUS : FRAME_STATUS)[kind];
+  $('#expand-engine').hidden = e.crop || kind === 'crop';
+  // The proportion the frame has right now, among those that crop with one tap.
+  const [iw, ih] = imageSize(e);
+  for (const b of $$('#expand-ratios button')) {
+    const [rw, rh] = b.dataset.crop.split(':').map(Number), to = ratioFrame(iw, ih, rw, rh);
+    b.setAttribute('aria-pressed', String(kind === 'crop' && hasRatio(e.width, e.height, rw, rh)));
+    b.disabled = frameKind(to.width, to.height, to.x, to.y, iw, ih) === 'same';
+  }
   // A frame at the size of the image is where a crop starts from, not a mistake: the line above says what to do.
   setError('#edit-error', kind === 'same' ? '' : error); $('#edit-submit').disabled = !!error;
   renderBox(); updateExpandCost();
@@ -4165,7 +4247,7 @@ $('#expand-model').onchange = () => {
 $('#expand-quality').addEventListener('change', () => updateExpandCost());
 function updateExpandCost() {
   const e = viewer.expansion; if (!e) return;
-  if (expansionKind() === 'crop') { const note = $('#edit-cost'); note.hidden = false; note.textContent = t('No cost: the crop is made on this device.'); note.title = ''; return; }
+  if (e.crop || expansionKind() === 'crop') { const note = $('#edit-cost'); note.hidden = false; note.textContent = t('No cost: the crop is made on this device.'); note.title = ''; return; }
   showCost('#edit-cost', { model: $('#expand-model').value, quality: $('#expand-quality').value, size: `${e.width}x${e.height}`, previews: editPrefs().previews,
     inputs: [[e.width, e.height]], promptLength: $('#edit-prompt').value.length });
 }
@@ -4173,9 +4255,16 @@ for (const id of ['expand-width', 'expand-height']) $('#' + id).onchange = () =>
   const e = viewer.expansion; if (!e) return;
   const w = Number($('#expand-width').value), hh = Number($('#expand-height').value);
   if (!Number.isInteger(w) || !Number.isInteger(hh) || w < 16 || hh < 16) { setError('#edit-error', t('Use whole dimensions, from 16 px up.')); $('#edit-submit').disabled = true; return; }
-  if (takeFrame(sizeFrame(frameOf(e), w, hh, ...imageSize(e)))) fitExpansion(false); else $('#edit-submit').disabled = true;
+  const [iw, ih] = imageSize(e);
+  if (takeFrame(e.crop ? holdCrop({ ...frameOf(e), width: w, height: hh }, 0, 0, iw, ih) : sizeFrame(frameOf(e), w, hh, iw, ih))) fitExpansion(false); else $('#edit-submit').disabled = true;
 };
 $('#expand-center').onclick = () => { const e = viewer.expansion; if (!e) return; Object.assign(e, centerFrame(frameOf(e), ...imageSize(e))); fitExpansion(true); };
+// A proportion: the largest frame of that shape in the middle of the image, a crop. Dragging the image moves it.
+for (const b of $$('#expand-ratios button')) b.onclick = () => {
+  const e = viewer.expansion; if (!e) return;
+  const [rw, rh] = b.dataset.crop.split(':').map(Number);
+  Object.assign(e, ratioFrame(...imageSize(e), rw, rh)); fitExpansion(true);
+};
 // The frame at the size of the image: where a crop starts from.
 $('#expand-fit').onclick = () => { const e = viewer.expansion; if (!e) return; const [iw, ih] = imageSize(e); Object.assign(e, { width: iw, height: ih, x: 0, y: 0 }); fitExpansion(true); };
 function beginFrameDrag(type, ev) {
@@ -4187,7 +4276,9 @@ function frameDragged(ev) {
   const d = expansionDrag, e = viewer.expansion; if (!d || !e) return;
   ev.preventDefault();
   const [iw, ih] = imageSize(e), scale = d.view.scale, dx = (ev.clientX - d.startX) / scale, dy = (ev.clientY - d.startY) / scale, magnet = 8 / scale;
-  if (!takeFrame(d.type === 'move' ? panFrame(d.frame, dx, dy, iw, ih, magnet) : resizeFrame(d.frame, d.type, dx, dy, iw, ih, magnet))) return;
+  const frame = e.crop ? (d.type === 'move' ? holdCrop(d.frame, dx, dy, iw, ih) : resizeCrop(d.frame, d.type, dx, dy, iw, ih, magnet))
+    : d.type === 'move' ? panFrame(d.frame, dx, dy, iw, ih, magnet) : resizeFrame(d.frame, d.type, dx, dy, iw, ih, magnet);
+  if (!takeFrame(frame)) return;
   // A handle moves the frame over the image, which stays where it is; dragging the image moves it under the frame.
   e.view = d.type === 'move' ? { ...d.view } : { scale, x: d.imageX - e.x * scale, y: d.imageY - e.y * scale };
   renderExpansion();
@@ -4207,7 +4298,7 @@ $$('#expand-frame [data-corner]').forEach(handle => {
     if (!e || !move) return;
     ev.preventDefault(); ev.stopPropagation();
     const by = ev.shiftKey ? 1 : 16;
-    if (takeFrame(resizeFrame(frameOf(e), handle.dataset.corner, move[0] * by, move[1] * by, ...imageSize(e)))) fitExpansion(false);
+    if (takeFrame((e.crop ? resizeCrop : resizeFrame)(frameOf(e), handle.dataset.corner, move[0] * by, move[1] * by, ...imageSize(e)))) fitExpansion(false);
   };
 });
 expandCanvas.onpointerdown = ev => { if (!viewer.expansion || ev.button) return; ev.preventDefault(); expandCanvas.setPointerCapture(ev.pointerId); beginFrameDrag('move', ev); };
@@ -4242,8 +4333,11 @@ async function submitExpansion() {
   } catch (err) { setError('#edit-error', err.message); return false; }
   finally { $('#edit-submit').disabled = false; }
 }
-/** A crop: the part of the image inside the frame becomes a new version. Nothing goes to the image API. True once saved. */
-async function submitCrop() {
+/**
+ * A crop: the part of the image inside the frame becomes a new version. Nothing goes to the image API. True once saved.
+ * From Recortar (open) the cropped image opens, to edit or expand it next.
+ */
+async function submitCrop(open = false) {
   const e = viewer.expansion, item = viewer.item, button = $('#edit-submit'), label = $('#edit-submit-label');
   const kept = keptArea(e.width, e.height, e.x, e.y, ...imageSize(e));
   button.disabled = true;
@@ -4258,7 +4352,8 @@ async function submitCrop() {
     const { image } = await api('import', { data: await blobData(blob), parent_id: item.id, crop: true });
     fresh.add(image.id);
     await Promise.all([refreshAfterJobs(), refreshLineage()]);
-    // The frame stays on the image it was drawn on, to crop again or change it; the new version is one tap away.
+    if (open) { await openViewer(image.id, { history: 'replace' }); toast(t('Crop saved as a new version.')); return true; }
+    // From Expandir the frame stays on the image it was drawn on, to crop again or change it; the new version is one tap away.
     toast(t('Crop saved as a new version.'), { action: { label: t('View'), run: () => openViewer(image.id, { history: 'replace' }) } });
     return true;
   } catch (err) { setError('#edit-error', err.message); return false; }

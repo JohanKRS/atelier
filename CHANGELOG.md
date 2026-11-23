@@ -22,6 +22,16 @@ To update an install, replace the app files with the ones from the new zip and k
 - The page shows what the GPU is doing for pictures too (preparing the pictures, planning the prompt, the steps, the upload), and the **GPU** chip says whether it is making a video or a picture.
 - Update note: upload the whole `colab/` folder (the notebook was renamed) with `gpu.php` and the rest of the app.
 
+## [1.3.0] - 2026-11-23
+
+### Pictures
+
+- Crop is a step of its own: the new Crop button shows a frame that stays inside the picture. Pull its handles or pick a proportion (1:1, 4:5, 3:4, 2:3, 9:16, 16:9, 4:3, 3:2), and drag the picture to choose which part stays. The crop is made in the browser, at no cost, and the cropped picture opens as a new version, ready to edit or expand. Expanding it toward the side that was cut off draws new content there, since the model only gets the cropped picture.
+- The brush has a Cover switch. Off, the painted area only marks the part to change, and the model still sees what is there. On, the area is erased from the picture that is sent, so the model draws it from scratch without seeing what was there. With nothing written, Fill area fills it with what surrounds it, which removes what was there; with text, the text says what goes there. A covered area shows as a solid checkered patch on the picture.
+- The edit buttons are in two groups: the four helpers of a plain edit on top (Area, File, Gallery, Variations), smaller, and the requests below in two rows of three (Crop, Expand, Upscale; Photoreal, Enhance, Clean).
+- Fixed: after a handle of the Expand frame was let go, the frame and the picture were not fitted to the screen again (since 1.0.0).
+- On a phone, choosing Crop or Expand brings the picture back into view, as the brush already did.
+
 ## [1.2.0] - 2026-11-23
 
 ### Videos
@@ -86,6 +96,7 @@ The first public release.
 - PHP 8.2 or newer with SQLite, no build step. Long requests keep going in the background, or in a separate process (`bin/worker.php`) on hosts that stop web processes early.
 
 [1.4.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.4.0
+[1.3.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.3.0
 [1.2.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.2.0
 [1.1.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.1.0
 [1.0.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.0.0

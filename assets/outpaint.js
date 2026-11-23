@@ -84,6 +84,30 @@ export function panFrame(frame, dx, dy, iw, ih, magnet = 0) {
 export function sizeFrame(frame, width, height, iw, ih) {
   return { width, height, x: Math.max(16 - iw, Math.min(width - 16, frame.x)), y: Math.max(16 - ih, Math.min(height - 16, frame.y)) };
 }
+// Recortar: the same frame, kept inside the image. It only cuts, so its sides take any whole size.
+/** The crop frame after one of its handles is dragged: its edges stay inside the image, at least 32 px apart. */
+export function resizeCrop(frame, handle, dx, dy, iw, ih, magnet = 0) {
+  let left = -frame.x, top = -frame.y, right = left + frame.width, bottom = top + frame.height;
+  const keepW = Math.min(KEEP, iw), keepH = Math.min(KEEP, ih);
+  const stick = (v, size) => (Math.abs(v) <= magnet ? 0 : Math.abs(v - size) <= magnet ? size : Math.round(v));
+  if (handle.includes('w')) left = Math.max(0, Math.min(stick(left + dx, iw), right - keepW));
+  if (handle.includes('e')) right = Math.min(iw, Math.max(stick(right + dx, iw), left + keepW));
+  if (handle.includes('n')) top = Math.max(0, Math.min(stick(top + dy, ih), bottom - keepH));
+  if (handle.includes('s')) bottom = Math.min(ih, Math.max(stick(bottom + dy, ih), top + keepH));
+  return { width: right - left, height: bottom - top, x: 0 - left, y: 0 - top };
+}
+/** The crop frame after the image is dragged under it, or after its size is typed: it stays inside the image. */
+export function holdCrop(frame, dx, dy, iw, ih) {
+  const width = Math.min(frame.width, iw), height = Math.min(frame.height, ih);
+  return { width, height, x: Math.min(0, Math.max(width - iw, Math.round(frame.x + dx))), y: Math.min(0, Math.max(height - ih, Math.round(frame.y + dy))) };
+}
+/** The largest frame of a proportion (rw:rh) inside the image, in its middle: a crop to that proportion. */
+export function ratioFrame(iw, ih, rw, rh) {
+  const width = iw * rh > ih * rw ? Math.max(16, Math.round(ih * rw / rh)) : iw, height = width === iw ? Math.max(16, Math.round(iw * rh / rw)) : ih;
+  return { width, height, x: 0 - Math.floor((iw - width) / 2), y: 0 - Math.floor((ih - height) / 2) };
+}
+/** Whether a frame has a proportion (rw:rh), to the pixel it was rounded to. */
+export const hasRatio = (width, height, rw, rh) => Math.abs(width * rh - height * rw) <= Math.max(rw, rh);
 /** The image in the middle of the frame. */
 export const centerFrame = (frame, iw, ih) => ({ width: frame.width, height: frame.height, x: Math.floor((frame.width - iw) / 2), y: Math.floor((frame.height - ih) / 2) });
 /**
