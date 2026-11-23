@@ -13,7 +13,7 @@ Apache and LiteSpeed read the included `.htaccess`. On nginx, see [nginx](#nginx
 
 ## Install
 
-1. **Upload** the contents of the zip from the [latest release](https://github.com/JohanKRS/atelier/releases/latest) to a folder of your site: `index.php`, `mcp.php`, `.htaccess`, `robots.txt`, `favicon.ico`, `config.example.php` and the folders `app/`, `assets/` and `bin/`. The root of a domain or a subfolder both work. From a clone of the repository, upload the same files and leave out `.git`, `tests/` and `docs/`.
+1. **Upload** the contents of the zip from the [latest release](https://github.com/JohanKRS/atelier/releases/latest) to a folder of your site: `index.php`, `mcp.php`, `gpu.php`, `.htaccess`, `robots.txt`, `favicon.ico`, `config.example.php` and the folders `app/`, `assets/`, `bin/` and `colab/`. The root of a domain or a subfolder both work. From a clone of the repository, upload the same files and leave out `.git`, `tests/` and `docs/`.
 2. **Configure.** Copy `config.example.php` to `config.php` and set `setup_token` to a long random code (24 characters or more), for example from `php -r 'echo bin2hex(random_bytes(24)), PHP_EOL;'`. The token only allows creating the first account; it is not a password, and you can clear it afterwards.
 3. **The data folder.** The app creates a private folder next to your document root on its own. PHP must be able to write there. If your host doesn't allow it, set `data_dir` in `config.php` to an absolute path outside every published folder, such as `/home/you/atelier-data`. The app refuses to store data inside the document root or its own folder.
 4. **Create the first account.** Open the site, enter the setup token, and choose a name and a password of at least 12 characters. This account is the administrator. Keep the password safe: **there is no way to recover it, or the library, without it.**
@@ -40,7 +40,7 @@ All options live in `config.php`, which must keep `<?php` at the top and `return
 
 ## nginx and servers that ignore `.htaccess`
 
-The `.htaccess` file closes the internal folders (`app/`, `bin/`, `tests/`), the configuration and the data files on Apache and LiteSpeed. nginx, and Apache with `AllowOverride None`, ignore it, so the same rules have to go into the server configuration. [`nginx.conf.example`](nginx.conf.example) is a complete example for nginx with PHP-FPM. If the internal folders answer on the web, the app warns the administrator in Settings.
+The `.htaccess` file closes the internal folders (`app/`, `bin/`, `colab/`, `tests/`), the configuration and the data files on Apache and LiteSpeed. nginx, and Apache with `AllowOverride None`, ignore it, so the same rules have to go into the server configuration. [`nginx.conf.example`](nginx.conf.example) is a complete example for nginx with PHP-FPM. If the internal folders answer on the web, the app warns the administrator in Settings.
 
 On Apache, `mod_rewrite` and `mod_headers` are recommended. Never use `777` permissions: the app creates its files as `0600` and its folders as `0700`.
 
@@ -86,6 +86,55 @@ Whoever has the token acts as that account, so keep it like a password. **Revoke
 
 The tools cover images (`generate_image`, `edit_image`, `upscale_image`, `list_images`, `get_image`, `import_image`, `check_requests`) and stories (`list_stories`, `create_story`, `open_story`, and the same tools the app's writer uses). Story tools only work after `open_story`, which hands the client the writer's instructions. Generated pictures come back with a preview and a download link valid for 24 hours.
 
+## Videos and pictures on a GPU (Google Colab)
+
+Atelier makes videos with sound and pictures with open models on a GPU you rent by the hour, such as Google Colab. Nothing heavy runs on your site: a notebook on the GPU takes the account's GPU requests from `gpu.php`, makes them with [ComfyUI](https://github.com/comfyanonymous/ComfyUI) inside the runtime and sends the results back to the library. Every call is short (a claim waits at most 20 seconds), so host limits like LiteSpeed's 120 seconds don't matter, and the GPU never needs an address of its own: no tunnel, proxy or open port, which also keeps it within Colab's rules.
+
+1. In **Settings › GPU**, press **Make a token**. It's shown once, with the site's address.
+2. Open the notebook ([`colab/atelier_gpu.ipynb`](../colab/atelier_gpu.ipynb), or **Open the notebook in Colab** in the same pane). In **Secrets** (the key on the left) add `ATELIER_URL` and `ATELIER_TOKEN`, with notebook access on. `HF_TOKEN` and `CIVITAI_TOKEN` are only needed for models and LoRAs that ask you to sign in on Hugging Face or Civitai; they stay in Colab and never reach Atelier.
+3. Choose the A100 GPU (**Runtime › Change runtime type**) and **Runtime › Run all**.
+
+The notebook loads the worker (`colab/atelier_worker.py`) from your server, so it always matches your version. The first start installs ComfyUI and downloads the models the waiting requests need (or the latest request's), which takes a few minutes on Colab: about 45 GB for videos (MiniMax H3 at the fast quality) and 47 GB for pictures (MiniMax H3-Image). Everything else downloads the first time a request asks for it in the session: the other video qualities and operations, the prompt expander (7 GB) and each LoRA. Requests made while the GPU is off wait in line; the page shows their progress (download, steps, upload) while the GPU works.
+
+The runtime **turns itself off** (`google.colab.runtime.unassign()`) after the minutes without requests chosen in the same pane (15 by default), when someone presses **Turn off now**, when the token is revoked, or when the server stops answering. A video or picture that was being made when the runtime went away is marked **Interrupted** after 3 minutes without news. On Colab Pro, keep the notebook's tab open while you use it; only Pro+ keeps running with the browser closed. An A100 80 GB uses about 7 to 15 compute units an hour while it's on.
+
+### Videos
+
+The model is **MiniMax H3** (video with stereo sound, 5 to 15 seconds, 480p or 768p). The three qualities follow ComfyUI's official templates: Fast (the Pika H3 Flex LoRA, 6 steps), Balanced (the Turbo LoRA, 8 steps, 4 with references) and Maximum (the full model, 20 steps). Its license doesn't allow use in the United States, the European Union, the United Kingdom or South Korea, so check where you and the GPU are. Colab doesn't allow deepfakes either.
+
+What a request can bring, and how the worker makes it:
+
+| In the video window | What H3 gets | Extra download, first time in a session |
+| --- | --- | --- |
+| Pictures pinned at the start, the end or any second | The first-and-last-frame workflow for the start and the end alone; otherwise the reference workflow, with each picture added as a guide at its frame | — |
+| Up to 9 reference pictures (`@1`), 3 videos of 2 to 15 s (`@v1`), 3 sounds of up to 5 MB (`@s1`) | The reference workflow's inputs; a sound pinned at a moment is also added as a guide there | — |
+| Continue a video | Its end as a reference and as the first frames of the new part, then joined to it with ffmpeg if asked | — |
+| Follow the pose, the depth or the outlines | The Fun ControlNet with SDPose, Depth Anything 3 or Canny over the video | 2.2 to 4.1 GB |
+| Replace a part | SAM 3 finds the part in every frame; the Fun ControlNet redraws only it | 3.8 GB |
+
+**Improve the prompt**, in the same window, sends the idea to Claude, GPT or Gemini (whichever has a key) with small copies of the pictures and a description of each input, and gets back a prompt in the structure H3 was trained on (MiniMax's own prompt guides): the alignment line for pinned pictures, or the subject definitions, the summary with its task types, what to keep of each reference, the shots with their timestamps, the soundscape and the music. It runs on your site, not on the GPU, and its cost goes into the account's spending. A prompt written by hand also works: the worker adds the alignment line or the reference fields it lacks.
+
+### Pictures
+
+**MiniMax H3-Image** is one more model in the generator and the edit panel (Advanced › Model), with the same tools as the image APIs. Its requests wait in line for the GPU like videos, and the result is an ordinary picture of the library, or a new version of the one it changed. The graphs follow ComfyUI's official H3-Image templates (6 steps, CFG 1).
+
+| In Atelier | What the GPU does |
+| --- | --- |
+| Quality Low, Medium, High | Draws at about 4, 8 or 16 MP (the model's native size); the size chosen sets the shape |
+| References (`@1`, up to 16) and edits | The pictures go to the model as `<Picture 1>`…, the one being changed first; an edit keeps its size |
+| An area painted with the brush, Expand | A copy with the area painted magenta goes last (the model has no mask); the result is pasted into the original only inside the area, with a soft edge |
+| Upscale, a custom size up to 12,000 px a side and 40 MP | Drawn at up to 20 MP and resized to the size asked for |
+| Planning on | MiniMax's prompt expander (Qwen3.5 9B, from the official templates) rewrites the prompt with the pictures in view, and picks the shape when the size is Auto; 7 GB more the first time in a session |
+| LoRAs (up to 4, strength -2 to 2) | Loaded on the model in order, with their trigger words added to the prompt |
+
+Variations work as with the other models: the directions of a varied batch are planned with the OpenAI or Gemini key, and each picture of the batch is a request for the GPU. There are no transparent backgrounds and no previews. The license (MiniMax-H3-Image Community License) doesn't allow use in the United States, the European Union, the United Kingdom or South Korea, and offering it to others as a hosted service needs MiniMax's authorization.
+
+**LoRAs** live in **Settings › GPU**: paste the link of the `.safetensors` file (on Hugging Face, the file's own link, `…/resolve/main/….safetensors` or `…/blob/main/…`; on Civitai, the version's Download link or the model page with `?modelVersionId=`), and optionally a name, the trigger words and the strength it starts at. The list is kept sealed with the account's key. The notebook downloads each LoRA the first time a request uses it in a session (into ComfyUI's `loras` folder), with `HF_TOKEN` or `CIVITAI_TOKEN` when the file asks for a sign-in.
+
+### The worker token
+
+The worker token can only read the account's GPU requests (prompts, the pictures and sounds sent with them, the library videos they use and the LoRAs' links) and add videos and pictures to its library. Like the MCP token, the server keeps an identifier and the account's key sealed with the token's secret, never the token. **Make a new token** or **Revoke** ends it at once, and a notebook that is on turns off.
+
 ## Moving to another folder or address
 
 The library lives in the data folder, outside the app's folder. When `data_dir` isn't set, the app writes the folder's location to `data-dir.php` next to `config.php` on first use. Move the app's folder with `config.php` and `data-dir.php`, leave the data folder where it is, and the new address opens the same library. You'll need to sign in again, and an MCP connector needs the new address of `mcp.php`.
@@ -115,12 +164,14 @@ The threat model and what the app doesn't protect against are in [SECURITY.md](.
 ## Development and tests
 
 ```sh
-# PHP: the vault, the API contracts, stories, comics, Gemini, the model catalog, visual novels, startup, translations
-php tests/run.php && php tests/stories.php && php tests/comics.php && php tests/gemini.php && php tests/catalog.php && php tests/vn.php && php tests/albums.php && php tests/startup.php && php tests/i18n.php
+# PHP: the vault, the API contracts, stories, comics, Gemini, the model catalog, visual novels, video requests and the prompt helper, pictures and LoRAs on the GPU, startup, translations
+php tests/run.php && php tests/stories.php && php tests/comics.php && php tests/gemini.php && php tests/catalog.php && php tests/vn.php && php tests/albums.php && php tests/video_prompt.php && php tests/gpu_images.php && php tests/startup.php && php tests/i18n.php
 # JavaScript
 node tests/outpaint.mjs && node tests/lineage.mjs && node tests/pricing.mjs && node tests/video.mjs && node tests/library.mjs && node tests/clean.mjs && node tests/story.mjs && node tests/reader.mjs && node tests/comics.mjs && node tests/pack.mjs
+# The GPU worker against a local server (no GPU: test patterns made with ffmpeg and Pillow)
+python3 tests/gpu_checks.py http://127.0.0.1:8099 "$test_data" "$test_token" && node tests/gpu-browser.mjs
 # A local server
-php -S 127.0.0.1:8099 -t .
+PHP_CLI_SERVER_WORKERS=4 php -S 127.0.0.1:8099 -t .
 ```
 
 The browser tests (`tests/browser.mjs`, `tests/*-browser.mjs`) use Playwright against a fresh local instance prepared by `tests/http_checks.py`; [`.github/workflows/checks.yml`](../.github/workflows/checks.yml) shows the exact order. No test calls a real API: the providers are played back by fixtures.

@@ -61,6 +61,13 @@ final class I18n
 
     public static function language(): string { return self::$language; }
 
+    /** What $make returns with the interface in another language: English for a text kept to be shown later in any. */
+    public static function in(string $language, callable $make): mixed
+    {
+        $was = self::$language; self::use($language);
+        try { return $make(); } finally { self::use($was); }
+    }
+
     /** The file with the translations of a language (none for English, the language of the code). */
     public static function file(string $language): ?string
     { return $language === 'en' || !isset(self::LANGUAGES[$language]) ? null : dirname(__DIR__).'/assets/i18n/'.$language.'.json'; }

@@ -53,6 +53,8 @@ final class Vault
                 position REAL NOT NULL, body BLOB NOT NULL, rev INTEGER NOT NULL DEFAULT 1, created INTEGER NOT NULL, updated INTEGER NOT NULL);
               CREATE TABLE IF NOT EXISTS story_inbox (id TEXT PRIMARY KEY, story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE, user_id TEXT NOT NULL,
                 created INTEGER NOT NULL, content BLOB NOT NULL);
+              CREATE TABLE IF NOT EXISTS gpu_workers (user_id TEXT PRIMARY KEY, token_id TEXT UNIQUE, token_key BLOB, created INTEGER, used INTEGER,
+                seen INTEGER, state TEXT, stop INTEGER NOT NULL DEFAULT 0, idle_minutes INTEGER NOT NULL DEFAULT 15);
               CREATE INDEX IF NOT EXISTS story_inbox_story ON story_inbox(story_id, created);
               CREATE INDEX IF NOT EXISTS stories_user ON stories(user_id, updated DESC);
               CREATE INDEX IF NOT EXISTS chapters_story ON chapters(story_id, position);
@@ -65,14 +67,15 @@ final class Vault
               CREATE INDEX IF NOT EXISTS albums_user ON albums(user_id);
               CREATE INDEX IF NOT EXISTS album_items_image ON album_items(image_id);');
             // Columns added after the first release. Phase, preview counters, owners, when a request started and whether its
-            // process holds a lock, the custom order, the chosen cover of each image's versions, whether an item is hidden from
+            // process holds a lock, who runs it (null: this server; gpu: the video worker on a GPU, as in Google Colab) and the
+            // progress that worker reports (steps and its own status line), the custom order, the chosen cover of each image's versions, whether an item is hidden from
             // the library and the stack it was grouped into (a random id), and whether an album's items show in the
             // library hold no user content; the
             // balance settings and the account's preferences (the reader's settings) are sealed like the API key, and a story's
             // character sheets, its comic adaptation (with the adaptation's own bible, plan and sheets) and a visual novel's
             // settings and art like its bible.
-            foreach (['jobs'=>['phase'=>'TEXT', 'preview'=>'INTEGER NOT NULL DEFAULT 0', 'user_id'=>'TEXT', 'started'=>'INTEGER', 'worker_lock'=>'INTEGER NOT NULL DEFAULT 0'], 'images'=>['user_id'=>'TEXT', 'position'=>'REAL', 'cover'=>'INTEGER NOT NULL DEFAULT 0', 'hidden'=>'INTEGER NOT NULL DEFAULT 0', 'stack'=>'TEXT'],
-                'users'=>['billing'=>'BLOB', 'claude_key'=>'BLOB', 'prefs'=>'BLOB', 'gemini_key'=>'BLOB'], 'albums'=>['library'=>'INTEGER NOT NULL DEFAULT 1'], 'stories'=>['cast'=>'BLOB', 'comic'=>'BLOB', 'vn'=>'BLOB', 'vn_art'=>'BLOB', 'comic_notes'=>'BLOB', 'comic_plan'=>'BLOB', 'comic_cast'=>'BLOB']] as $table => $added) {
+            foreach (['jobs'=>['phase'=>'TEXT', 'preview'=>'INTEGER NOT NULL DEFAULT 0', 'user_id'=>'TEXT', 'started'=>'INTEGER', 'worker_lock'=>'INTEGER NOT NULL DEFAULT 0', 'runner'=>'TEXT', 'progress'=>'TEXT'], 'images'=>['user_id'=>'TEXT', 'position'=>'REAL', 'cover'=>'INTEGER NOT NULL DEFAULT 0', 'hidden'=>'INTEGER NOT NULL DEFAULT 0', 'stack'=>'TEXT'],
+                'users'=>['billing'=>'BLOB', 'claude_key'=>'BLOB', 'prefs'=>'BLOB', 'gemini_key'=>'BLOB'], 'albums'=>['library'=>'INTEGER NOT NULL DEFAULT 1'], 'gpu_workers'=>['loras'=>'BLOB'], 'stories'=>['cast'=>'BLOB', 'comic'=>'BLOB', 'vn'=>'BLOB', 'vn_art'=>'BLOB', 'comic_notes'=>'BLOB', 'comic_plan'=>'BLOB', 'comic_cast'=>'BLOB']] as $table => $added) {
                 $columns = array_column($this->db->query("PRAGMA table_info($table)")->fetchAll(), 'name');
                 foreach ($added as $column => $type) {
                     if (in_array($column, $columns, true)) continue;
@@ -352,6 +355,14 @@ final class Vault
         if (strlen($head) >= 8 && in_array(substr($head, 4, 4), ['ftyp','moov','mdat','free','skip','wide','pnot'], true)) return 'video/mp4';
         return null;
     }
+    /** Format of a picture from its first bytes: PNG, JPEG or WebP. */
+    public static function pictureType(string $head): ?string
+    {
+        if (str_starts_with($head, "\x89PNG\r\n\x1A\n")) return 'image/png';
+        if (str_starts_with($head, "\xFF\xD8\xFF")) return 'image/jpeg';
+        if (str_starts_with($head, 'RIFF') && substr($head, 8, 4) === 'WEBP') return 'image/webp';
+        return null;
+    }
     private static function megabytes(int $bytes): string { return I18n::number($bytes / 1048576).' MB'; }
 
     /** Starts the upload of a video of $size bytes. The id is also the one the video will have in the library. */
@@ -387,7 +398,8 @@ final class Vault
     {
         $size = (int)$this->upload($id)['size']; $count = self::chunkCount($size); $length = strlen($data);
         if ($offset < 0 || $offset % self::VIDEO_CHUNK || $length < 1 || $offset + $length > $size || ($offset + $length < $size && $length % self::VIDEO_CHUNK)) throw new HttpError(422, t('Invalid video piece.'));
-        if ($offset === 0 && self::videoType(substr($data, 0, 16)) === null) throw new HttpError(415, t('Video format not supported. Use MP4, MOV or WebM.'));
+        // A video, or a picture made on the GPU (takeUpload): a picture never becomes a video (finishUpload checks).
+        if ($offset === 0 && self::videoType(substr($data, 0, 16)) === null && self::pictureType(substr($data, 0, 16)) === null) throw new HttpError(415, t('Video format not supported. Use MP4, MOV or WebM.'));
         $handle = @fopen($this->partPath($id), 'c+b');
         if (!$handle) throw new HttpError(404, t('Upload not found.'));
         try {
@@ -410,8 +422,9 @@ final class Vault
     /**
      * Turns a complete upload into a library item. $info carries what the browser read from the video (name, duration,
      * dimensions, frame rate); $poster is a frame of it as a data URL. Repeating the call after a lost answer returns the item.
+     * $extra is what a video made on the GPU worker keeps (Gpu): its prompt, sources and request; $album, where it goes.
      */
-    public function finishUpload(string $id, array $info, string $poster, string $key): array
+    public function finishUpload(string $id, array $info, string $poster, string $key, array $extra = [], ?string $album = null): array
     {
         self::validId($id);
         $q = $this->db->prepare('SELECT 1 FROM images WHERE id=? AND user_id=?'); $q->execute([$id, $this->owner()]);
@@ -433,11 +446,31 @@ final class Vault
             'operation'=>'video','label'=>null,'kind'=>'video','mime'=>$type,'size'=>$size,'width'=>(int)$width,'height'=>(int)$height,
             'duration'=>round($duration, 6),'fps'=>$fps === null ? null : round($fps, 6),'frames'=>$frames === null ? null : (int)$frames,
             'poster_mime'=>(string)getimagesizefromstring($posterBytes)['mime']];
+        // A video made on the GPU worker: its prompt, the images it started from, the request and how it was made.
+        $meta = array_merge($meta, array_intersect_key($extra, array_flip(['title','prompt','original_prompt','options','parent_ids','job_id','generated','audio','seed','engine','label','typed'])));
         if (!@rename($part, $this->videoPath($id))) throw new HttpError(503, t('[DATA-WRITE] Could not finish the video in the private folder.'));
-        try { $this->store($id, ['full'=>$posterBytes, 'thumb'=>$this->thumbnail($posterBytes)], $meta, $key); }
+        try { $this->store($id, ['full'=>$posterBytes, 'thumb'=>$this->thumbnail($posterBytes)], $meta, $key, $album); }
         catch (\Throwable $e) { @rename($this->videoPath($id), $part); throw $e; }
         $this->db->prepare('DELETE FROM uploads WHERE id=?')->execute([$id]);
         return $this->video($id, $key);
+    }
+
+    /**
+     * The whole of a complete upload of a picture (one the GPU made): it is saved as a library image (saveImage), not
+     * kept in chunks as a video is, and then its upload removed (abortUpload).
+     */
+    public function readUpload(string $id, string $key): string
+    {
+        $size = (int)$this->upload($id)['size']; $part = $this->partPath($id);
+        clearstatcache(true, $part);
+        if (self::receivedBytes((int)@filesize($part), $size) !== $size) throw new HttpError(409, t('The picture has not fully reached the server yet.'));
+        $handle = @fopen($part, 'rb');
+        if (!$handle) throw new HttpError(404, t('Upload not found.'));
+        $bytes = '';
+        try { for ($index = 0, $count = self::chunkCount($size); $index < $count; $index++) $bytes .= $this->readChunk($handle, $id, $index, $size, $key); }
+        finally { fclose($handle); }
+        if (self::pictureType(substr($bytes, 0, 16)) === null) throw new HttpError(415, t('The GPU sent an invalid picture.'));
+        return $bytes;
     }
 
     public function abortUpload(string $id): void

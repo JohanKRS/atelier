@@ -10,3 +10,4 @@
 /tests/artifacts/
 *.log
 .DS_Store
+__pycache__/

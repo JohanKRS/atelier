@@ -65,6 +65,7 @@ $iconVersion = substr(md5($iconStamp), 0, 10);
     </div>
     <span class="grow"></span>
     <button id="activity" class="activity" type="button" hidden><span class="spinner small" aria-hidden="true"></span><span id="activity-text"></span></button>
+    <button id="gpu-chip" class="balance-chip gpu-chip" type="button" hidden><span class="gpu-dot" aria-hidden="true"></span><span class="balance-label">GPU</span><span class="balance-text" id="gpu-chip-text"></span></button>
     <span id="balances" class="balances">
       <button id="balance-chip-openai" class="balance-chip" data-account="openai" type="button" hidden><span class="balance-label">OpenAI</span><span class="balance-text"></span></button>
       <button id="balance-chip-claude" class="balance-chip" data-account="claude" type="button" hidden><span class="balance-label">Claude</span><span class="balance-text"></span></button>
@@ -94,6 +95,7 @@ from behind, looking at the sea') ?>"></textarea></label>
             <button type="button" id="file-open" class="tool" title="<?= e('References from the computer (you can also drag or paste them)') ?>"><span data-icon="image-plus"></span><span><?= e('File') ?></span></button>
             <button type="button" id="gallery-refs" class="tool" title="<?= e('Choose one or more images from the gallery as references') ?>"><span data-icon="gallery"></span><span><?= e('Gallery') ?></span></button>
             <button type="button" id="vary-open" class="tool" aria-pressed="false" title="<?= e('Several different images from a single request: the app varies each one, or you write one line per image') ?>"><span data-icon="variations"></span><span><?= e('Variations') ?></span></button>
+            <button type="button" id="video-open" class="tool" title="<?= e('A video with sound from this prompt, made on your GPU (Colab). The references go with it.') ?>"><span data-icon="video"></span><span><?= e('Video') ?></span></button>
             <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
           </div>
           <div class="vary-box" id="vary-box" hidden>
@@ -127,6 +129,7 @@ from behind, looking at the sea') ?>"></textarea></label>
               <label><?= e('Quality') ?><select id="quality"></select></label>
               <label><?= e('Complexity') ?><select id="complexity"></select></label>
             </div>
+            <div id="loras" class="loras-field stack" hidden></div>
           </div>
           <details class="more" id="more-options">
             <summary><?= e('More options') ?></summary>
@@ -143,7 +146,7 @@ from behind, looking at the sea') ?>"></textarea></label>
               <p class="hint"><?= e('Previews show partial versions while the image is generated. Each preview has a small extra cost.') ?></p>
               <div class="stack advanced-only">
                 <label><?= e('Prompt planning') ?><select id="thinking"></select></label>
-                <p class="hint"><?= e('Rewrites the prompt before generating: with GPT-6 Sol for the GPT Image models, with Gemini 3.8 Flash for Nano Banana. Extra cost. If it refuses, the image is made with the prompt as written.') ?></p>
+                <p class="hint" id="thinking-hint"><?= e('Rewrites the prompt before generating: with GPT-6 Sol for the GPT Image models, with Gemini 3.8 Flash for Nano Banana. Extra cost. If it refuses, the image is made with the prompt as written.') ?></p>
               </div>
               <p id="size-note" class="hint"></p>
               <button type="button" id="restore-defaults" class="link-btn"><?= e('Restore defaults') ?></button>
@@ -417,6 +420,7 @@ from behind, looking at the sea') ?>"></textarea></label>
       <div id="stage-loading" class="stage-loading" hidden><span class="spinner"></span></div>
       <div class="stage-bar" id="stage-bar">
         <button type="button" id="compare" class="chip" aria-pressed="false" hidden><span data-icon="compare"></span><span id="compare-text"><?= e('Compare') ?></span></button>
+        <button type="button" id="animate-open" class="chip image-only" title="<?= e('A video with sound that starts from this image, made on your GPU (Colab).') ?>"><span data-icon="video"></span><span><?= e('Animate') ?></span></button>
         <span id="stage-meta" class="muted"></span>
         <button type="button" id="zoom-reset" class="chip" hidden title="<?= e('Fit to the screen (key 0)') ?>"><span id="zoom-text">100%</span><span><?= e('Fit') ?></span></button>
       </div>
@@ -437,10 +441,11 @@ from behind, looking at the sea') ?>"></textarea></label>
         </div>
       </div>
       <div class="brush-bar" id="brush-bar" hidden>
-        <span class="brush-hint"><?= e('Paint what should be redone') ?></span>
+        <span class="brush-hint" id="brush-hint"><?= e('Paint what should be redone') ?></span>
+        <button type="button" id="mask-cover" class="chip" aria-pressed="false" title="<?= e('Cover: the painted area goes erased, so the AI does not see what was there and draws it from scratch. Off, it sees the area and redoes it from what is there.') ?>"><span data-icon="eye-off"></span><span class="mask-cover-text"><?= e('Cover', ['ctx' => 'brush']) ?></span></button>
         <label class="brush-size"><span class="sr-only"><?= e('Brush size') ?></span><span data-icon="brush"></span><input type="range" id="brush-size" min="6" max="220" value="56"></label>
         <button type="button" id="mask-clear" class="chip"><?= e('Clear') ?></button>
-        <button type="button" id="mask-done" class="chip" title="<?= e('Keep the marked area and go write the request') ?>"><?= e('Done') ?></button>
+        <button type="button" id="mask-done" class="chip" title="<?= e('Keep the marked area and go write the request') ?>" aria-label="<?= e('Done') ?>"><span data-icon="check"></span><span class="mask-done-text"><?= e('Done') ?></span></button>
         <button type="button" id="mask-go" class="chip strong" title="<?= e('Generate a new version with only the painted area redone. The text in the box, if any, says what should appear in it. (Ctrl+Enter)') ?>"><?= e('Redo area') ?></button>
       </div>
     </section>
@@ -454,11 +459,17 @@ from behind, looking at the sea') ?>"></textarea></label>
             <button type="button" id="frame-edit" class="btn primary"><span data-icon="pencil"></span><?= e('Edit this frame') ?></button>
             <button type="button" id="frame-upscale" class="btn secondary"><span data-icon="upscale"></span><?= e('Upscale', ['ctx' => 'action']) ?></button>
             <button type="button" id="frame-reference" class="btn secondary"><span data-icon="image-plus"></span><?= e('Use as reference') ?></button>
+            <button type="button" id="frame-animate" class="btn secondary"><span data-icon="video"></span><?= e('Continue as a video') ?></button>
             <button type="button" id="frame-save" class="btn secondary"><span data-icon="camera"></span><?= e('Save to the gallery') ?></button>
             <button type="button" id="frame-download" class="btn ghost"><span data-icon="download"></span><?= e('Download PNG') ?></button>
           </div>
           <p id="frame-status" class="hint" aria-live="polite"></p>
           <p class="hint"><?= e('Comma and period move one frame; with Shift, 10. ← and → go to the previous or next item. Space plays or pauses. The mouse wheel zooms in to check details. The frame is saved at the video\'s resolution.') ?></p>
+        </section>
+        <section class="stack" id="video-from-part">
+          <h3><?= e('A new video from this one') ?></h3>
+          <p class="hint"><?= e('On the GPU: continue it, redo it following its movement, or replace a part of it.') ?></p>
+          <div><button type="button" id="video-from" class="btn secondary"><span data-icon="video"></span><?= e('Make a video from this one') ?></button></div>
         </section>
         <section id="video-upload" class="upload-box" hidden>
           <div class="upload-head"><span id="video-upload-text" class="grow"></span><button type="button" id="video-upload-action" class="link-btn"></button></div>
@@ -483,19 +494,20 @@ from behind, looking at the sea') ?>"></textarea></label>
           <label class="lines-box" id="edit-vary-lines-box" hidden><span><?= e('One line per image') ?></span><textarea id="edit-vary-lines" data-vary-lines rows="3" maxlength="10000" placeholder="<?= e('sitting on the beach
 running on the sand
 from behind, looking at the sea') ?>"></textarea></label>
-          <div class="tools" role="group" aria-label="<?= e('Edit tools') ?>">
+          <div class="tools edit-tools" role="group" aria-label="<?= e('Edit tools') ?>">
             <button type="button" id="brush-toggle" class="tool" aria-pressed="false" title="<?= e('Paint the area to redo: only it changes. Without text, that part is redone; with text, it becomes what you ask for. (B)') ?>"><span data-icon="brush"></span><span><?= e('Area') ?></span></button>
             <button type="button" id="edit-file-open" class="tool" title="<?= e('References from the computer (you can also drag or paste them)') ?>"><span data-icon="image-plus"></span><span><?= e('File') ?></span></button>
             <button type="button" id="edit-gallery-refs" class="tool" title="<?= e('Choose one or more images from the gallery as references') ?>"><span data-icon="gallery"></span><span><?= e('Gallery') ?></span></button>
             <button type="button" id="edit-vary-open" class="tool" aria-pressed="false" title="<?= e('Several different versions of this image from a single request (for example, poses or scenes): the app varies each one, or you write one line per image') ?>"><span data-icon="variations"></span><span><?= e('Variations') ?></span></button>
+            <button type="button" id="crop-open" class="tool" aria-pressed="false" aria-controls="action-panel" title="<?= e('Keep only a part of the image: pull the frame\'s handles or pick a proportion. Made on this device, at no cost; the cropped image opens as a new version, ready to edit or expand.') ?>"><span data-icon="crop"></span><span><?= e('Crop', ['ctx' => 'action']) ?></span></button>
+            <button type="button" id="expand-open" class="tool" aria-pressed="false" aria-controls="action-panel" title="<?= e('Enlarge the canvas beyond the edges of the image, on whichever side you want (pulling a side inward also cuts it off). The text in the box, if any, says what should appear in the new areas.') ?>"><span data-icon="expand"></span><span><?= e('Expand') ?></span></button>
             <button type="button" id="upscale-open" class="tool" aria-pressed="false" aria-controls="action-panel" title="<?= e('Recreate at a higher resolution. The text in the box, if any, says what to improve.') ?>"><span data-icon="upscale"></span><span><?= e('Upscale', ['ctx' => 'action']) ?></span></button>
-            <button type="button" id="expand-open" class="tool" aria-pressed="false" aria-controls="action-panel" title="<?= e('Crop the image and enlarge the canvas beyond its edges, on whichever side you want. The text in the box, if any, says what should appear in the new areas.') ?>"><span data-icon="expand"></span><span><?= e('Expand') ?></span></button>
             <button type="button" id="photoreal" class="tool" aria-pressed="false" aria-controls="action-panel" title="<?= e('The same image as a real photo, from a professional camera or a phone. Keeps the composition, the people, the anatomy and every detail; only the style changes. The text in the box, if any, goes along as a note and has priority.') ?>"><span data-icon="camera"></span><span><?= e('Photoreal') ?></span></button>
             <button type="button" id="enhance" class="tool" aria-pressed="false" aria-controls="action-panel" title="<?= e('Recreates the same image clean, without noise, specks, grain, artifacts or strange textures, with natural skin in the same tone and no oily shine, without changing the style, the people or the composition. The text in the box, if any, goes along as a note and has priority.') ?>"><span data-icon="sparkle"></span><span><?= e('Enhance') ?></span></button>
             <button type="button" id="clean" class="tool" aria-pressed="false" aria-controls="action-panel" title="<?= e('Removes specks and the web of fine lines from the image right on your device, without using the API and at no cost. Outlines, eyes, hair and details stay sharp. The result becomes a new version.') ?>"><span data-icon="eraser"></span><span><?= e('Clean') ?></span></button>
             <input id="edit-file" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
           </div>
-          <div id="mask-chip" class="mask-chip" hidden><span data-icon="brush"></span><span><?= e('Only the marked area') ?></span><button type="button" id="mask-remove" class="icon-btn tiny" data-icon="close" aria-label="<?= e('Remove the marked area') ?>"></button></div>
+          <div id="mask-chip" class="mask-chip" hidden><span data-icon="brush"></span><span id="mask-chip-text"><?= e('Only the marked area') ?></span><button type="button" id="mask-remove" class="icon-btn tiny" data-icon="close" aria-label="<?= e('Remove the marked area') ?>"></button></div>
           <div class="vary-box" id="edit-vary-box" hidden>
             <div class="vary-head">
               <span class="field-title" id="edit-vary-title"><?= e('Several images') ?></span>
@@ -553,6 +565,12 @@ from behind, looking at the sea') ?>"></textarea></label>
                 <button type="button" id="expand-fit" class="link-btn" title="<?= e('Make the frame the size of the image, to start a crop') ?>"><?= e('Frame on the image') ?></button>
                 <button type="button" id="expand-center" class="link-btn" title="<?= e('Put the image in the middle of the frame') ?>"><?= e('Center') ?></button>
               </div>
+              <fieldset class="field" id="expand-ratio-field" hidden>
+                <legend><?= e('Proportion') ?></legend>
+                <div id="expand-ratios" class="segmented small crop-ratios">
+                  <?php foreach (['1:1', '4:5', '3:4', '2:3', '9:16', '16:9', '4:3', '3:2'] as $ratio): ?><button type="button" data-crop="<?= $ratio ?>" aria-pressed="false"><?= $ratio ?></button><?php endforeach ?>
+                </div>
+              </fieldset>
               <p id="expand-dimensions" class="hint" aria-live="polite"></p>
               <div class="row2" id="expand-engine">
                 <label><?= e('Model') ?><select id="expand-model"></select></label>
@@ -572,6 +590,7 @@ from behind, looking at the sea') ?>"></textarea></label>
               <label><?= e('Quality') ?><select id="edit-quality"></select></label>
               <label><?= e('Complexity') ?><select id="edit-complexity"></select></label>
             </div>
+            <div id="edit-loras" class="loras-field stack" hidden></div>
           </div>
           <details class="more" id="edit-more">
             <summary><?= e('More options') ?></summary>
@@ -643,6 +662,7 @@ from behind, looking at the sea') ?>"></textarea></label>
       <p class="settings-group"><?= e('Account') ?></p>
       <button type="button" class="settings-tab" data-pane="account" aria-controls="settings-account"><span data-icon="user"></span><span><?= e('Name and password') ?></span></button>
       <button type="button" class="settings-tab" data-pane="mcp" aria-controls="settings-mcp"><span data-icon="plug"></span><span><?= e('MCP access') ?></span></button>
+      <button type="button" class="settings-tab" data-pane="gpu" aria-controls="settings-gpu"><span data-icon="video"></span><span>GPU</span></button>
       <button type="button" class="settings-tab" data-pane="about" aria-controls="settings-about"><span data-icon="book"></span><span><?= e('About me as a reader') ?></span></button>
       <button type="button" class="settings-tab" data-pane="language" aria-controls="settings-language"><span data-icon="globe"></span><span><?= e('Language') ?></span></button>
       <p class="settings-group"><?= e('System') ?></p>
@@ -816,6 +836,54 @@ from behind, looking at the sea') ?>"></textarea></label>
         </div>
       </section>
 
+      <section class="settings-pane" id="settings-gpu" aria-labelledby="settings-gpu-title" hidden>
+        <div class="pane-head">
+          <h3 id="settings-gpu-title">GPU</h3>
+          <p class="hint"><?= e('Videos with sound and pictures made with open models on a GPU you rent by the hour, such as Google Colab. A notebook there takes this account\'s GPU requests, makes them and sends them to the library, and turns its runtime off by itself when no request comes, so it spends no credits waiting.') ?></p>
+        </div>
+        <div class="settings-card stack" id="gpu-card">
+          <div class="gpu-now"><span class="gpu-dot" aria-hidden="true"></span><strong id="gpu-state"></strong></div>
+          <p id="gpu-detail" class="hint"></p>
+          <div class="row-end"><button type="button" id="gpu-stop" class="btn ghost small danger-text" hidden><?= e('Turn off now') ?></button><span class="grow"></span><a id="gpu-notebook" class="btn secondary small" target="_blank" rel="noopener noreferrer"><span data-icon="video"></span><?= e('Open the notebook in Colab') ?></a></div>
+        </div>
+        <div class="settings-card stack">
+          <h4><?= e('Worker token') ?></h4>
+          <p id="gpu-token-status" class="hint"></p>
+          <div id="gpu-token-output" class="stack" hidden></div>
+          <div class="row-end"><button type="button" id="gpu-revoke" class="btn ghost small danger-text"><?= e('Revoke') ?></button><span class="grow"></span><button type="button" id="gpu-token" class="btn primary small"><?= e('Make a token') ?></button></div>
+        </div>
+        <div class="settings-card stack">
+          <label><?= e('Turn the GPU off after') ?><select id="gpu-idle"></select></label>
+          <p class="hint"><?= e('Minutes without requests. Each session downloads and loads the models again (a few minutes), so a longer wait is better while you are still making videos or pictures.') ?></p>
+        </div>
+        <div class="settings-card stack" id="lora-card">
+          <h4>LoRAs</h4>
+          <p class="hint"><?= e('Small add-ons that teach MiniMax H3-Image a style, a character or a look, for the pictures made on the GPU. Paste the link of the .safetensors file on Hugging Face or Civitai; the notebook downloads it the first time a request uses it in a session. A file that asks you to sign in needs the HF_TOKEN or CIVITAI_TOKEN secret in Colab, never here. Choose them in the generator and the edit panel when the model is MiniMax H3-Image.') ?></p>
+          <ul id="lora-list" class="lora-list"></ul>
+          <form id="lora-form" class="stack" autocomplete="off">
+            <label><?= e('Link of the file') ?><input id="lora-url" type="url" inputmode="url" required spellcheck="false" placeholder="https://huggingface.co/…/resolve/main/….safetensors"></label>
+            <div class="row2">
+              <label><?= e('Name') ?><input id="lora-name" maxlength="80" placeholder="<?= e('From the file, if empty') ?>"></label>
+              <label><?= e('Trigger words') ?><input id="lora-trigger" maxlength="200" placeholder="<?= e('Optional, separated by commas') ?>"></label>
+            </div>
+            <label><?= e('Strength it starts at') ?><span class="range-row"><input type="range" id="lora-strength" min="-2" max="2" step="0.05" value="1"><output id="lora-strength-value">1</output></span></label>
+            <p id="lora-error" class="error" role="alert"></p>
+            <div class="row-end"><button type="button" id="lora-cancel" class="btn ghost small" hidden><?= e('Cancel') ?></button><span class="grow"></span><button type="submit" id="lora-save" class="btn primary small"><?= e('Add LoRA') ?></button></div>
+          </form>
+        </div>
+        <div class="settings-card stack gpu-steps">
+          <h4><?= e('How to turn it on') ?></h4>
+          <ol>
+            <li><?= e('Make a token here and copy it.') ?></li>
+            <li><?= e('Open the notebook in Colab. In Secrets (the key on the left), add ATELIER_URL with this site\'s address and ATELIER_TOKEN with the token, with notebook access on. HF_TOKEN and CIVITAI_TOKEN are only for models and LoRAs that ask you to sign in.') ?></li>
+            <li><?= e('Choose the A100 GPU (Runtime › Change runtime type) and Runtime › Run all. Requests made meanwhile wait in line.') ?></li>
+          </ol>
+          <p class="hint"><?= e('In Colab Pro keep the notebook\'s tab open while you use it. An A100 80 GB uses about 7 to 15 compute units per hour, while it is on.') ?></p>
+          <p class="hint" id="gpu-license"></p>
+          <p class="hint"><?= e('Colab does not allow deepfakes: don\'t put real people\'s faces in videos or pictures made there.') ?></p>
+        </div>
+      </section>
+
       <section class="settings-pane" id="settings-about" aria-labelledby="settings-about-title" hidden>
         <div class="pane-head">
           <h3 id="settings-about-title"><?= e('About me as a reader') ?></h3>
@@ -891,6 +959,59 @@ from behind, looking at the sea') ?>"></textarea></label>
   <div id="history-story" class="history-story" hidden></div>
   <div id="requests-list" class="requests"></div>
   <div id="history-foot" class="history-foot"></div>
+</dialog>
+
+<dialog id="video-dialog" class="sheet wide video-sheet" aria-labelledby="video-title">
+  <form id="video-form" class="stack" novalidate>
+    <div class="sheet-head"><h2 id="video-title"><?= e('New video') ?></h2><button type="button" class="icon-btn" data-close="video-dialog" data-icon="close" aria-label="<?= e('Close') ?>"></button></div>
+    <button type="button" id="video-gpu" class="gpu-line"><span class="gpu-dot" aria-hidden="true"></span><span id="video-gpu-text"></span></button>
+    <div class="segmented small" id="video-kinds" role="group" aria-label="<?= e('Kind of video') ?>">
+      <button type="button" data-video-kind="new" aria-pressed="true"><?= e('New video') ?></button>
+      <button type="button" data-video-kind="video" aria-pressed="false"><?= e('From a video') ?></button>
+    </div>
+    <div class="field" id="video-keys-part">
+      <span class="field-title"><?= e('Pinned pictures') ?></span>
+      <p class="hint"><?= e('The video passes exactly through these pictures: the first frame, the last one and any moment in between. All optional.') ?></p>
+      <div id="video-keys" class="video-frames video-keys"></div>
+    </div>
+    <div class="field" id="video-source-part" hidden>
+      <span class="field-title"><?= e('The video') ?></span>
+      <div id="video-source" class="video-frames"></div>
+      <label><?= e('What to do') ?><select id="video-op"></select></label>
+      <p class="hint" id="video-op-hint"></p>
+      <label id="video-target-label"><?= e('What to replace, in English') ?><input type="text" id="video-target" maxlength="120" autocomplete="off" spellcheck="false" placeholder="<?= e('the red car') ?>"></label>
+      <label class="switch" id="video-join-label"><input type="checkbox" id="video-join" checked><span class="switch-track" aria-hidden="true"></span><span><?= e('Join it to the end of the original video') ?></span></label>
+      <label class="switch" id="video-keep-audio-label"><input type="checkbox" id="video-keep-audio" checked><span class="switch-track" aria-hidden="true"></span><span><?= e('Keep the sound of the original video') ?></span></label>
+    </div>
+    <div class="field">
+      <span class="field-title"><?= e('References') ?></span>
+      <p class="hint" id="video-refs-hint"></p>
+      <div id="video-refs" class="video-frames"></div>
+      <div class="video-add">
+        <button type="button" class="btn small ghost" id="video-add-picture"><span data-icon="image-plus"></span><?= e('Picture') ?></button>
+        <button type="button" class="btn small ghost" id="video-add-video"><span data-icon="video"></span><?= e('Video') ?></button>
+        <button type="button" class="btn small ghost" id="video-add-sound"><span data-icon="music"></span><?= e('Sound') ?></button>
+        <input type="file" id="video-sound-file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" hidden>
+      </div>
+    </div>
+    <label class="prompt-box video-prompt"><span class="sr-only"><?= e('Describe the video') ?></span><textarea id="video-prompt" rows="6" maxlength="8000" placeholder="<?= e('What happens, second by second: the action, the camera, the voices and sounds, the music') ?>"></textarea></label>
+    <div class="video-improve">
+      <button type="button" class="btn small secondary" id="video-improve"><span data-icon="sparkle"></span><?= e('Improve the prompt') ?></button>
+      <label class="sr-only" for="video-improve-with"><?= e('Model that improves the prompt') ?></label><select id="video-improve-with"></select>
+      <button type="button" class="btn small ghost" id="video-improve-undo" hidden><span data-icon="undo"></span><?= e('Back to mine') ?></button>
+      <span class="hint grow" id="video-improve-note" aria-live="polite"></span>
+    </div>
+    <div class="video-options">
+      <label><?= e('Length') ?><span class="range-row"><input type="range" id="video-seconds" min="5" max="15" step="1" value="5"><output id="video-seconds-out"></output></span></label>
+      <label id="video-aspect-label"><?= e('Aspect ratio') ?><select id="video-aspect"></select></label>
+      <label><?= e('Resolution') ?><select id="video-resolution"></select></label>
+      <label><?= e('Quality') ?><select id="video-quality"></select></label>
+      <label><?= e('Seed (optional)') ?><input type="number" id="video-seed" min="0" step="1" inputmode="numeric" placeholder="<?= e('Random') ?>"></label>
+    </div>
+    <p class="hint" id="video-note"></p>
+    <p id="video-error" class="error" role="alert"></p>
+    <div class="row-end"><button type="button" class="btn ghost" data-close="video-dialog"><?= e('Cancel') ?></button><button type="submit" class="btn primary" id="video-submit"><span data-icon="video"></span><?= e('Make the video') ?></button></div>
+  </form>
 </dialog>
 
 <dialog id="job-dialog" class="sheet wide job-sheet" aria-labelledby="job-title">

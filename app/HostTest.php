@@ -121,7 +121,7 @@ final class HostTest
             if (!is_array($s)) { $out['kinds'][$kind] = ['state'=>'waiting']; continue; }
             $age = time() - (int)@filemtime($this->folder().'/'.$kind.'.json');
             $state = $s['end'] === null ? ($age > self::SILENT ? 'killed' : 'running') : (['completed'=>'completed', 'unavailable'=>'unavailable'][$s['end']['how']] ?? 'stopped');
-            $out['kinds'][$kind] = ['state'=>$state, 'seconds'=>(float)($s['end']['at'] ?? $s['beat']), 'error'=>$s['end']['error'] ?? null, 'why'=>$s['end']['why'] ?? null]
+            $out['kinds'][$kind] = ['state'=>$state, 'seconds'=>(float)($s['end']['at'] ?? $s['beat']), 'error'=>$s['end']['error'] ?? null, 'why'=>isset($s['end']['why']) ? t((string)$s['end']['why']) : null]
                 + array_intersect_key($s, ['noabort'=>1, 'max_execution_time'=>1, 'php'=>1, 'extensions'=>1]);
         }
         return $out;

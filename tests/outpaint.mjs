@@ -1,6 +1,6 @@
 import './i18n-setup.mjs';
 import assert from 'node:assert/strict';
-import { snap16, frameKind, keptArea, validateFrame, frameTooLarge, resizeFrame, panFrame, sizeFrame, centerFrame, frameView } from '../assets/outpaint.js';
+import { snap16, frameKind, keptArea, validateFrame, frameTooLarge, resizeFrame, panFrame, sizeFrame, centerFrame, ratioFrame, hasRatio, resizeCrop, holdCrop, frameView } from '../assets/outpaint.js';
 
 assert.equal(snap16(1539), 1536);
 const IW = 1536, IH = 1152;
@@ -70,6 +70,37 @@ assert.deepEqual(sizeFrame({ width: 2048, height: 1536, x: 256, y: 192 }, 1024, 
 assert.deepEqual(sizeFrame({ width: 2048, height: 1536, x: 1800, y: 192 }, 1024, 1024, IW, IH), { width: 1024, height: 1024, x: 1008, y: 192 });
 assert.deepEqual(centerFrame({ width: 2048, height: 1536, x: 0, y: 0 }, IW, IH), { width: 2048, height: 1536, x: 256, y: 192 });
 assert.deepEqual(centerFrame({ width: 800, height: 600, x: 0, y: 0 }, IW, IH), { width: 800, height: 600, x: -368, y: -276 });
+// A proportion crops the largest frame of that shape out of the middle of the image.
+assert.deepEqual(ratioFrame(IW, IH, 1, 1), { width: 1152, height: 1152, x: -192, y: 0 });
+assert.deepEqual(ratioFrame(IW, IH, 16, 9), { width: 1536, height: 864, x: 0, y: -144 });
+assert.deepEqual(ratioFrame(IW, IH, 2, 3), { width: 768, height: 1152, x: -384, y: 0 });
+assert.deepEqual(ratioFrame(1024, 1536, 4, 5), { width: 1024, height: 1280, x: 0, y: -128 });
+assert.deepEqual(ratioFrame(1000, 1000, 16, 9), { width: 1000, height: 563, x: 0, y: -218 });
+for (const [rw, rh] of [[1, 1], [4, 5], [3, 4], [2, 3], [9, 16], [16, 9], [4, 3], [3, 2]]) {
+  const f = ratioFrame(1000, 777, rw, rh);
+  assert.ok(hasRatio(f.width, f.height, rw, rh), `${rw}:${rh} keeps its proportion`);
+  assert.equal(frameKind(f.width, f.height, f.x, f.y, 1000, 777), 'crop', `${rw}:${rh} only crops`);
+  assert.equal(validateFrame(f.width, f.height, f.x, f.y, 1000, 777), '');
+}
+assert.equal(frameKind(...Object.values(ratioFrame(IW, IH, 4, 3)), IW, IH), 'same', 'the proportion the image already has leaves it as it is');
+assert.ok(!hasRatio(1152, 1100, 1, 1));
+
+// Recortar keeps the frame inside the image: a handle stops at the edge, any whole size is fine, and dragging the image
+// under the frame moves it only as far as the image goes.
+assert.deepEqual(resizeCrop(whole, 'w', 301, 0, IW, IH), { width: 1235, height: 1152, x: -301, y: 0 });
+assert.deepEqual(resizeCrop(whole, 'w', -200, 0, IW, IH), whole, 'pulled outward, the side stays on the edge of the image');
+assert.deepEqual(resizeCrop(whole, 'se', -37, -1000, IW, IH), { width: 1499, height: 152, x: 0, y: 0 });
+assert.deepEqual(resizeCrop(whole, 'e', -1600, 0, IW, IH), { width: 32, height: 1152, x: 0, y: 0 }, 'it keeps at least 32 px');
+assert.deepEqual(resizeCrop({ width: 800, height: 600, x: -100, y: -100 }, 'n', 0, -94, IW, IH, 8), { width: 800, height: 700, x: -100, y: 0 }, 'an edge close to the image\'s sticks to it');
+const crop = { width: 800, height: 600, x: -100, y: -100 };
+assert.deepEqual(holdCrop(crop, 50, 0, IW, IH), { width: 800, height: 600, x: -50, y: -100 });
+assert.deepEqual(holdCrop(crop, 500, 500, IW, IH), { width: 800, height: 600, x: 0, y: 0 });
+assert.deepEqual(holdCrop(crop, -5000, -5000, IW, IH), { width: 800, height: 600, x: -736, y: -552 });
+assert.deepEqual(holdCrop({ width: 4000, height: 600, x: -100, y: -100 }, 0, 0, IW, IH), { width: IW, height: 600, x: 0, y: -100 }, 'a typed size larger than the image is the image\'s');
+for (const [h, dx, dy] of [['nw', 700, 500], ['ne', -900, 30], ['s', 0, 2000], ['w', -3000, 0], ['sw', 9999, -9999]]) {
+  const f = resizeCrop(crop, h, dx, dy, IW, IH);
+  assert.ok(['crop', 'same'].includes(frameKind(f.width, f.height, f.x, f.y, IW, IH)), `${h} stays inside the image`);
+}
 // A frame around the image fills the stage; the scale never goes over 1.
 assert.deepEqual(frameView({ width: 2048, height: 1536, x: 256, y: 192 }, IW, IH, 1088, 832), { scale: 0.5, x: 32, y: 32 });
 // A crop: the whole image is still shown, and the frame is drawn where it sits on it.

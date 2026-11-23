@@ -49,10 +49,15 @@ export function forkDepth(chain) {
 
 export const FIXED_SIZES = ['1024x1024', '1024x1536', '1536x1024'];
 
-/** Same limits the server enforces for flexible models. */
-export function validSize(width, height) {
-  if (![width, height].every(Number.isInteger) || width % 16 || height % 16) return false;
+/**
+ * Same limits the server enforces for flexible models (limits: outpaint.js's API_LIMITS, the default, or GPU_LIMITS:
+ * a model on the account's GPU takes any whole size within them).
+ */
+export function validSize(width, height, limits = null) {
+  if (![width, height].every(Number.isInteger) || width < 1 || height < 1) return false;
   const area = width * height;
+  if (limits?.gpu) return Math.min(width, height) >= 64 && Math.max(width, height) <= limits.side && Math.max(width, height) / Math.min(width, height) <= limits.ratio && area <= limits.area;
+  if (width % 16 || height % 16) return false;
   return Math.max(width, height) <= 3840 && Math.max(width, height) / Math.min(width, height) <= 3 && area >= 655360 && area <= 8294400;
 }
 
@@ -90,16 +95,17 @@ export function aspectOf(size, fallback = 1) {
 const MAX_AREA = 8294400, MAX_SIDE = 3840;
 
 /**
- * Larger output sizes for upscaling a width × height image, keeping its proportions within the API limits.
- * Returns [{ label, width, height }], smallest first; empty when the image can't get any larger.
+ * Larger output sizes for upscaling a width × height image, keeping its proportions within the API limits (or a GPU
+ * model's, `limits`). Returns [{ label, width, height }], smallest first; empty when the image can't get any larger.
  */
-export function upscaleSizes(width, height) {
-  if (!width || !height || width / height > 3 || height / width > 3) return [];
-  const limit = Math.min(Math.sqrt(MAX_AREA / (width * height)), MAX_SIDE / Math.max(width, height));
+export function upscaleSizes(width, height, limits = null) {
+  const ratio = limits?.ratio || 3;
+  if (!width || !height || width / height > ratio || height / width > ratio) return [];
+  const limit = Math.min(Math.sqrt((limits?.area || MAX_AREA) / (width * height)), (limits?.side || MAX_SIDE) / Math.max(width, height));
   const fit = scale => {
     for (const round of [Math.round, Math.floor]) {
       const w = round(width * scale / 16) * 16, h = round(height * scale / 16) * 16;
-      if (validSize(w, h)) return [w, h];
+      if (validSize(w, h, limits)) return [w, h];
     }
     return null;
   };

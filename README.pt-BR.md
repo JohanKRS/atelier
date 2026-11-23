@@ -17,12 +17,14 @@ Ele começou como um lugar arrumado para guardar imagens geradas e, aos poucos, 
 
 ## Imagens
 
-Descreva o que você quer, escolha o formato e a qualidade, e gere. O Atelier trabalha com os modelos GPT Image da OpenAI e, se você puser uma chave do Google, com o Nano Banana.
+Descreva o que você quer, escolha o formato e a qualidade, e gere. O Atelier trabalha com os modelos GPT Image da OpenAI, com o Nano Banana se você puser uma chave do Google, e com o MiniMax H3-Image, aberto, na sua própria GPU.
 
 - **Edite descrevendo.** Diga o que deve mudar, pinte a parte que você quer mexer, ou traga outras imagens da biblioteca como referência (`@1`, `@2`).
 - **Ajudas de um clique.** Ampliar, expandir a tela, deixar fotorrealista, melhorar, ou limpar ruídos e linhas soltas.
 - **Nada se perde.** Cada edição vira uma versão nova numa árvore. Dá para voltar, comparar com a original ou seguir por outro caminho.
 - **Uma biblioteca onde você acha as coisas.** Álbuns, favoritas, pilhas, imagens ocultas, busca pelo prompt, ordem por tamanho ou formato. Vídeos também: solte um clipe, escolha um frame e edite.
+- **Vídeos com som, na sua própria GPU.** Comece do texto, fixe imagens no primeiro quadro, no último ou em qualquer segundo no meio, traga imagens, vídeos e sons como referência, ou parta de um vídeo: continue, siga o movimento dele ou troque uma parte. Um ajudante reescreve a sua ideia do jeito que o modelo (MiniMax H3) entende melhor. Roda numa GPU alugada por hora, como a do Google Colab: um notebook lá pega os pedidos, manda os vídeos para a sua biblioteca e desliga sozinho quando você para.
+- **Imagens na sua própria GPU, com LoRAs.** No mesmo notebook, o MiniMax H3-Image faz imagens com todas as ferramentas acima, até 16 MP e sem custo por imagem, e com as LoRAs que você escolher no Hugging Face ou no Civitai. Veja [Vídeos e imagens na GPU](docs/manual.pt-BR.md#vídeos-e-imagens-na-gpu-google-colab).
 
 ![Um farol e as edições dele, na árvore de versões](docs/screenshots/versions.webp)
 

@@ -272,7 +272,8 @@ TEXT;
             $s['model'] = array_key_first($models);
         }
         if (!in_array($s['effort'], self::EFFORTS, true)) throw new HttpError(422, t('Invalid reasoning level.'));
-        if (!is_string($s['image_model']) || Images::model($s['image_model']) === null) throw new HttpError(422, t('Image model not supported.'));
+        // The GPU's models make pictures only when its notebook is on, so the writer, which waits for them, doesn't use them.
+        if (!is_string($s['image_model']) || Images::model($s['image_model']) === null || Images::provider($s['image_model']) === 'gpu') throw new HttpError(422, t('Image model not supported.'));
         if (!in_array($s['image_quality'], self::IMAGE_QUALITIES, true)) throw new HttpError(422, t('Invalid image quality.'));
         $words = filter_var($s['chapter_words'], FILTER_VALIDATE_INT);
         if ($words === false || $words < 300 || $words > 20000) throw new HttpError(422, t('Chapter length goes from 300 to 20,000 words.'));

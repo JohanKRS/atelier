@@ -1,10 +1,10 @@
 import { t, language, locale, number } from './i18n.js';
 // The other modules load with this file's version, so a new upload never mixes old and new code behind a cache.
 const assetVersion = new URL(import.meta.url).search;
-const [{ snap16, frameKind, keptArea, validateFrame, frameTooLarge, resizeFrame, panFrame, sizeFrame, centerFrame, frameView }, { versionNumbers, buildTree, branches, forkDepth, validSize, editSize, aspectOf, upscaleSizes },
+const [{ snap16, frameKind, keptArea, validateFrame, frameTooLarge, resizeFrame, panFrame, sizeFrame, centerFrame, ratioFrame, hasRatio, resizeCrop, holdCrop, frameView, API_LIMITS, GPU_LIMITS }, { versionNumbers, buildTree, branches, forkDepth, validSize, editSize, aspectOf, upscaleSizes },
   { estimate, usageCost, formatUsd, PRICING_CHECKED, GEMINI_PRICING_CHECKED, isGemini, setAliases, UNKNOWN_IMAGE, balanceNow, formatBalance, planningCost, planningAverage, learnedScale }, { mp4Timing, snapFps, fpsLabel, frameAt, frameTime, frameCount, timecode, megabytes, COMMON_RATES },
-  { justify, firstRowAt, monthMarks, railMarks }, { strips }, storyHelpers, { createStories }, readerModule, { createComics, zip }, packModule, { createVn }] =
-  await Promise.all(['outpaint', 'lineage', 'pricing', 'video', 'library', 'clean', 'story', 'stories', 'reader', 'comics', 'pack', 'vn'].map(name => import(`./${name}.js${assetVersion}`)));
+  { justify, firstRowAt, monthMarks, railMarks }, { strips }, storyHelpers, { createStories }, readerModule, { createComics, zip }, packModule, { createVn }, { createGpu, aspectRatio }] =
+  await Promise.all(['outpaint', 'lineage', 'pricing', 'video', 'library', 'clean', 'story', 'stories', 'reader', 'comics', 'pack', 'vn', 'gpu'].map(name => import(`./${name}.js${assetVersion}`)));
 
 // ---------------------------------------------------------------------------
 // DOM helpers and icons
@@ -26,6 +26,7 @@ const ICONS = {
   upload: '<path d="M12 15V4.5M7.5 9 12 4.5 16.5 9M5 19.5h14"/>',
   trash: '<path d="M4.5 7h15M9.5 7V5.2c0-.7.5-1.2 1.2-1.2h2.6c.7 0 1.2.5 1.2 1.2V7M6.5 7l.8 11.6c.1 1 .9 1.9 2 1.9h5.4c1.1 0 1.9-.9 2-1.9L17.5 7M10 11v5.5M14 11v5.5"/>',
   brush: '<path d="M20 4.2c-.5-.5-1.4-.5-1.9 0L10.4 12l1.8 1.8 7.8-7.7c.5-.5.5-1.4 0-1.9z"/><path d="M9.6 13.2c-1.9-.3-3.6 1-3.8 3-.2 1.4-.9 2.4-2.3 2.8 3.6 1.4 7.8.4 8.1-3.7"/>',
+  crop: '<path d="M6.5 2.5v13a2 2 0 0 0 2 2h13"/><path d="M2.5 6.5h13a2 2 0 0 1 2 2v13"/>',
   expand: '<path d="M4 9V5.5C4 4.7 4.7 4 5.5 4H9M15 4h3.5c.8 0 1.5.7 1.5 1.5V9M20 15v3.5c0 .8-.7 1.5-1.5 1.5H15M9 20H5.5C4.7 20 4 19.3 4 18.5V15"/><rect x="8.5" y="8.5" width="7" height="7" rx="1.2"/>',
   upscale: '<path d="M4 20l6.5-6.5M4 14.5V20h5.5"/><path d="M13 4h7v7"/><path d="M20 4l-6.5 6.5"/>',
   pencil: '<path d="M4.5 19.5h3.8L18.6 9.2a2.7 2.7 0 0 0-3.8-3.8L4.5 15.7z"/><path d="m13.5 6.7 3.8 3.8"/>',
@@ -78,6 +79,7 @@ const ICONS = {
   feather: '<path d="M19.5 4.5c-6 0-11 4.5-11 11v4"/><path d="M8.5 15.5h5.5c3.2 0 5.5-4.6 5.5-11"/><path d="M4.5 19.5l4-4"/>',
   send: '<path d="M4.5 12 19.5 4.5 15 19.5l-3.2-6.3z"/><path d="m11.8 13.2 7.7-8.7"/>',
   stop: '<rect x="6.5" y="6.5" width="11" height="11" rx="2"/>',
+  music: '<path d="M9 17.5V6l10-2v11.5"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/>',
   eye: '<path d="M2.8 12s3.4-6.5 9.2-6.5 9.2 6.5 9.2 6.5-3.4 6.5-9.2 6.5S2.8 12 2.8 12z"/><circle cx="12" cy="12" r="2.8"/>',
   dialogue: '<path d="M4.5 6.5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-6l-4.5 3.5v-3.5h-.5a2 2 0 0 1-2-2z"/><path d="M8.5 9h7M8.5 12.2h4.5"/>',
   key: '<circle cx="8" cy="15.5" r="3.75"/><path d="M10.7 12.8 19.5 4M15.8 7.7l2.6 2.6M13.6 9.9l2 2"/>',
@@ -139,6 +141,10 @@ const OPERATION = { generate: 'Original', import: t('Imported'), edit: t('Edit')
 const EXPAND_PROMPT = 'Expand the image by filling only the transparent areas outside the original image. Preserve the elements, framing, details and colors of the original region. Continue the scene, lighting, perspective and textures naturally, with no borders, seams or repeated objects.';
 // A marked area sent with nothing written: the area is made again as a correct version of itself. Names no kind of image.
 const INPAINT_PROMPT = `Redo only the area marked by the mask, and nothing else. Generate that area again as a clean, correct and natural version of what it shows: the same subject and elements, in the same place, pose and size, fixed wherever they are malformed, distorted, garbled, smudged or damaged (for example hands and fingers, faces, eyes, teeth, lettering, warped objects, broken textures, seams and artifacts). It must blend seamlessly with the rest of the picture: the same style, light, colors, perspective, focus and texture, with no visible border. Do not add new objects, do not remove what the area shows and do not change its meaning. Everything outside the marked area stays exactly as it is.`;
+// Cobrir: the area goes erased (transparent; Gemini sees it flat gray), so the model can't see what was there. With text,
+// the area is drawn from it; without, it is filled with what surrounds it, as if what was there had never been.
+const COVER_NOTE = 'The area marked by the mask was erased on purpose before sending: it is empty (transparent, or flat gray), so nothing of what was there should be guessed, kept or rebuilt. Draw that area anew following the request below, so that it blends seamlessly with the rest of the picture: the same style, light, colors, perspective, focus and texture, with no visible border. Everything outside the marked area stays exactly as it is.\n\nRequest: ';
+const FILL_PROMPT = 'The area marked by the mask was erased on purpose before sending: it is empty (transparent, or flat gray). Fill it with what naturally belongs there, continuing the surroundings (background, surfaces, light, perspective and textures), so that it looks as if whatever was there had never been in the picture. Do not add new objects or people, and leave no outline, seam or placeholder. Everything outside the marked area stays exactly as it is.';
 const UPSCALE_PROMPT = 'Recreate this same image at a higher resolution. Preserve exactly the composition, framing, proportions, colors, lighting, faces, text and every element in the same positions. Make the image clean and well defined, with smooth transitions, and remove noise, grain, specks, jagged edges and compression artifacts, without inventing new texture. Do not add, remove or reinterpret anything.';
 const FORMAT_OF_MIME = { 'image/png': 'png', 'image/jpeg': 'jpeg', 'image/webp': 'webp' };
 const PREFS_KEY = 'imagegen.prefs.v1';
@@ -273,6 +279,15 @@ function confirmAction({ title, message, confirm, danger = false }) {
 
 $$('[data-close]').forEach(b => b.addEventListener('click', () => document.getElementById(b.dataset.close).close()));
 
+// The GPU worker (gpu.js): the window that asks for a video, the GPU's state, the LoRAs and the GPU requests in the feed.
+const gpuUi = createGpu({ api, h, icon, toast, confirmAction, trackJob: job => { trackJob(job); schedulePoll(1500); }, newId, $, $$, dateTime, imageUrl, showSettings: pane => showSettings(pane),
+  pickImages: (list, max, done, title) => openPicker({ textarea: '#video-prompt', list: () => list, offset: 0, max, base: () => null, render: done, title, mentions: false }),
+  pickVideos: (list, max, done, title) => openPicker({ textarea: '#video-prompt', list: () => list, offset: 0, max, base: () => null, render: done, title, mentions: false, kind: 'video' }),
+  keys: () => ({ claude: !!state.has_claude_key, openai: !!state.has_key, gemini: !!state.has_gemini_key }), formatUsd,
+  activeJobs: () => [...state.jobs.values()].filter(j => ACTIVE.has(j.status)), prefs: () => state.prefs, savePrefs, changed: () => scheduleRender(),
+  // The account's LoRAs changed (Settings › GPU): the pickers of the composer and the edit panel follow.
+  lorasChanged: () => { if (state.unlocked) renderLoraFields(); } });
+
 // Stories (stories.js): the writer's section, with what it shares of this page.
 const stories = createStories({ api, h, icon, toast, confirmAction, imageUrl, openViewer, trackJob, launchQueued, formatUsd, dateTime, plural, newId, story: storyHelpers, reader: readerModule, createComics, createVn, $,
   openHistory: story => openHistory({ story }),
@@ -370,6 +385,7 @@ async function enter() {
   viewer.versionsView = state.prefs.versions === 'time' ? 'time' : 'tree';
   applyColumns();
   await Promise.all([loadGallery(), loadFeedJobs(), refreshBalance()]);
+  gpuUi.refresh().then(() => gpuUi.schedule());
   if (state.user?.admin) checkExposure();
   if (!state.has_key) showSettings();
   // Fresh lists from the APIs when the kept ones are old, without holding the page.
@@ -502,15 +518,29 @@ function qualities(model) {
   const m = state.models[model];
   // Nano Banana: the quality is how much it thinks before drawing (Pro always thinks a lot: only Alta).
   if (m?.provider === 'gemini') return QUALITY.filter(([v]) => v in (m.qualities || {}));
+  // A model on the account's GPU: the quality is how many megapixels it draws.
+  if (m?.provider === 'gpu') return QUALITY.filter(([v]) => v in (m.qualities || {})).map(([v, label]) => [v, t('{quality} · {n} MP', { quality: label, n: number(m.qualities[v]) })]);
   return m?.extended ? [...QUALITY, ...QUALITY_EXTENDED] : QUALITY;
 }
-/** What a model doesn't have, turned off in a panel's fields: Nano Banana makes no transparent background and no previews. */
+const isGpu = model => state.models?.[model]?.provider === 'gpu';
+/** The sizes a model generates: the image APIs' or, for a model on the account's GPU, its own (outpaint.js). */
+const limitsOf = model => isGpu(model) ? GPU_LIMITS : API_LIMITS;
+/** Whether a request for this model needs the OpenAI key (the GPU's models need the worker token, which the server checks). */
+const needsKey = model => !state.has_key && !isGpu(model);
+/** What a model doesn't have, turned off in a panel's fields: Nano Banana and the GPU's models make no transparent background and no previews. */
 function syncProviderFields(model, { background = null, previews = null, moderation = null } = {}) {
-  const gemini = model?.provider === 'gemini';
+  const gemini = model?.provider === 'gemini', gpu = model?.provider === 'gpu', off = gemini || gpu;
   const transparent = background?.querySelector('option[value=transparent]');
-  if (transparent) transparent.disabled = gemini;
-  if (gemini && background?.value === 'transparent') background.value = 'auto';
-  for (const el of [previews, moderation]) if (el) { el.disabled = gemini; el.title = gemini ? t('Nano Banana does not have this option') : ''; }
+  if (transparent) transparent.disabled = off;
+  if (off && background?.value === 'transparent') background.value = 'auto';
+  for (const el of [previews, moderation]) if (el) { el.disabled = off; el.title = gemini ? t('Nano Banana does not have this option') : gpu ? t('{model} does not have this option', { model: model.label }) : ''; }
+}
+/** Prompt planning: the effort of GPT-6 Sol or Gemini, or for a model on the GPU MiniMax's expander, on or off. */
+const GPU_THINKING = [['off', t('Off')], ['medium', t('MiniMax\'s expander')]];
+function syncThinking(select, model) {
+  const gpu = isGpu(model), previous = select.value;
+  if ((select.dataset.gpu === 'true') !== gpu) { fillSelect(select, gpu ? GPU_THINKING : THINKING, previous); select.dataset.gpu = String(gpu); }
+  if (gpu && previous !== 'off') select.value = 'medium';
 }
 function modelEntries(filter = () => true) { return Object.entries(state.models).filter(([, m]) => filter(m)).map(([id, m]) => [id, m.label]); }
 function syncModelFields(modelSelect, qualitySelect, complexitySelect, fallbackQuality = 'high') {
@@ -586,7 +616,8 @@ const QUALITY_PANELS = {
   edit: { model: '#edit-model', quality: '#edit-quality', complexity: '#edit-complexity', thinking: '#edit-thinking', presets: '#edit-presets', summary: '#edit-preset-summary', apply: () => persistEdit() },
 };
 function presetValues(preset, model) {
-  return { quality: qualities(model).some(([v]) => v === preset.quality) ? preset.quality : 'high', complexity: preset.complexity, thinking: preset.thinking };
+  const thinking = isGpu(model) && preset.thinking !== 'off' ? 'medium' : preset.thinking;
+  return { quality: qualities(model).some(([v]) => v === preset.quality) ? preset.quality : 'high', complexity: preset.complexity, thinking };
 }
 /** The level these options correspond to, or null when they were set by hand. */
 function presetOf(o) {
@@ -601,7 +632,7 @@ function describeOptions(o) {
   const name = (list, value) => (list.find(([v]) => v === value)?.[1] || value).toLowerCase();
   const parts = [model?.label || o.model, t('{level} quality', { level: name([...QUALITY, ...QUALITY_EXTENDED], o.quality) })];
   if (model?.complexity) parts.push(t('{level} complexity', { level: name(COMPLEXITY, o.complexity) }));
-  parts.push(o.thinking === 'off' ? t('no prompt planning') : o.thinking === 'none' ? t('prompt planning without reasoning') : t('prompt planning with {effort} effort', { effort: name(THINKING, o.thinking) }));
+  parts.push(o.thinking === 'off' ? t('no prompt planning') : model?.provider === 'gpu' ? t('prompt planned by MiniMax\'s expander') : o.thinking === 'none' ? t('prompt planning without reasoning') : t('prompt planning with {effort} effort', { effort: name(THINKING, o.thinking) }));
   return parts.join(', ') + '.';
 }
 function panelValues(panel) {
@@ -619,7 +650,7 @@ function renderPresets(panel) {
 }
 function choosePreset(panel, preset) {
   const p = QUALITY_PANELS[panel], v = presetValues(preset, $(p.model).value);
-  $(p.quality).value = v.quality; $(p.complexity).value = v.complexity; $(p.thinking).value = v.thinking;
+  $(p.quality).value = v.quality; $(p.complexity).value = v.complexity; syncThinking($(p.thinking), $(p.model).value); $(p.thinking).value = v.thinking;
   p.apply();
 }
 function setOptionsMode(mode, { save = true } = {}) {
@@ -654,11 +685,18 @@ function updateComposerModel() {
   const model = state.models[$('#model').value]; if (!model) return;
   syncModelFields($('#model'), $('#quality'), $('#complexity'));
   syncProviderFields(model, { background: $('#background'), previews: $('#previews'), moderation: $('#moderation') });
+  syncThinking($('#thinking'), $('#model').value);
+  $('#thinking-hint').textContent = model.provider === 'gpu'
+    ? t('MiniMax\'s prompt expander (from ComfyUI\'s official templates) rewrites the prompt on the GPU before the picture, and chooses its shape when the size is Auto. No cost; it downloads 7 GB more the first time in a session. If it fails, the picture is made with the prompt as written.')
+    : t('Rewrites the prompt before generating: with GPT-6 Sol for the GPT Image models, with Gemini 3.8 Flash for Nano Banana. Extra cost. If it refuses, the image is made with the prompt as written.');
+  renderLoraFields();
   const fixed = ['1:1', '2:3', '3:2', 'auto'];
   $$('.ratio').forEach(b => { b.disabled = !model.flex && !fixed.includes(b.dataset.ratio); });
   if (!model.flex && !fixed.includes(state.ratio)) setRatio('1:1');
   $('#size-note').textContent = model.provider === 'gemini'
     ? t('{model}: comes out at 1K, 2K or 4K depending on the size; an aspect ratio it does not have is cropped from the result. {note}', { model: model.label, note: model.note || '' })
+    : model.provider === 'gpu'
+    ? t('{model}: the quality sets the megapixels and the size the shape (Custom: any size up to 12,000 px per side). With Auto, the prompt expander chooses the shape, or it follows the first reference when it is off. {note}', { model: model.label, note: model.note || '' })
     : model.flex
     ? t('Custom: multiples of 16, aspect ratio up to 3:1 and up to 3,840 px per side. Above 2560 × 1440 the result is experimental.')
     : t('This model only accepts 1:1, 2:3, 3:2 and automatic.');
@@ -742,7 +780,14 @@ const refSize = ref => ref.width ? [ref.width, ref.height] : UNKNOWN_IMAGE;
 /** The planning calls of a request: one per image at the effort chosen, and one for the directions of a varied batch. */
 const planningCalls = (o, varied) => [...(o.thinking !== 'off' ? [o.thinking] : []), ...(varied ? ['variation'] : [])];
 function showCost(selector, spec) {
-  const el = $(selector); const result = spec && estimate(spec);
+  const el = $(selector);
+  if (spec && isGpu(spec.model)) {
+    el.hidden = false;
+    el.textContent = t('No API cost: made on your GPU (Colab).');
+    el.title = t('The GPU\'s time is paid to whoever rents it, such as Colab\'s compute units, while the notebook is on. Varied batches plan their directions with the OpenAI or Gemini key.');
+    return;
+  }
+  const result = spec && estimate(spec);
   el.hidden = !result; if (!result) return;
   const n = spec.n || 1, calls = spec.planning || [];
   // The averages are of GPT-6 Sol's planning: Nano Banana's (Gemini 3.8 Flash) is only mentioned.
@@ -770,9 +815,30 @@ function composerSize() {
   return state.ratio === 'auto' ? 'auto' : state.sizes[state.ratio];
 }
 function composerOptions() {
-  return { model: $('#model').value, size: composerSize(), quality: $('#quality').value, complexity: $('#complexity').value, format: $('#format').value,
+  const model = $('#model').value;
+  return { model, size: composerSize(), quality: $('#quality').value, complexity: $('#complexity').value, format: $('#format').value,
     background: $('#background').value, compression: Number($('#compression').value), n: Number($('#quantity').value), moderation: $('#moderation').value,
-    thinking: $('#thinking').value, previews: Number($('#previews').value), vary: varyForms.composer.mode !== 'same' };
+    thinking: $('#thinking').value, previews: Number($('#previews').value), vary: varyForms.composer.mode !== 'same',
+    ...(isGpu(model) ? { loras: chosenLoras('composer') } : {}) };
+}
+// LoRAs (gpu.js): for a model on the account's GPU, the composer and the edit panel each keep the ones chosen, with
+// their strengths, as [{ id, strength }].
+const loraChoice = { composer: [], edit: [] };
+const loraFields = { composer: { box: '#loras', model: '#model', save: () => persistComposer() }, edit: { box: '#edit-loras', model: '#edit-model', save: () => persistEdit() } };
+const loraCopy = list => (Array.isArray(list) ? list : []).filter(l => typeof l?.id === 'string').map(l => ({ id: l.id, strength: Number(l.strength ?? 1) })).slice(0, 4);
+/** The LoRAs chosen in a panel that are still in the account's list. */
+function chosenLoras(panel) {
+  const known = gpuUi.loraList();
+  return loraChoice[panel].filter(c => !known || known.some(l => l.id === c.id));
+}
+function renderLoraFields() {
+  for (const [panel, f] of Object.entries(loraFields)) {
+    const box = $(f.box), model = state.models[$(f.model).value], show = model?.provider === 'gpu';
+    box.hidden = !show;
+    if (!show) continue;
+    f.render ||= gpuUi.loraPicker(box, { get: () => loraChoice[panel], set: list => { loraChoice[panel] = loraCopy(list); f.render(); f.save(); }, max: model.max_loras || 4 });
+    f.render();
+  }
 }
 function applyOptions(options) {
   const o = { ...DEFAULT_OPTIONS, ...(options || {}) };
@@ -780,7 +846,8 @@ function applyOptions(options) {
   updateComposerModel();
   const set = (selector, value) => { const el = $(selector); if ([...el.options].some(opt => opt.value === String(value))) el.value = String(value); };
   set('#quality', o.quality); set('#complexity', o.complexity); set('#format', o.format); set('#background', o.background);
-  set('#quantity', o.n); set('#moderation', o.moderation); set('#thinking', o.thinking); set('#previews', o.previews);
+  set('#quantity', o.n); set('#moderation', o.moderation); syncThinking($('#thinking'), $('#model').value); set('#thinking', o.thinking); set('#previews', o.previews);
+  loraChoice.composer = loraCopy(o.loras);
   $('#compression').value = o.compression; $('#compression-value').textContent = o.compression;
   varyForms.composer.mode = o.vary === false ? 'same' : 'auto';
   const ratio = Object.keys(state.sizes).find(k => state.sizes[k] === o.size);
@@ -881,6 +948,9 @@ async function addRefFiles(target, files) {
 const addComposerRefs = files => addRefFiles(REF_TARGETS.composer, files);
 acceptDrops($('#drop-area'), addComposerRefs); acceptPaste($('#prompt'), addComposerRefs);
 $('#gallery-refs').onclick = () => openPicker(REF_TARGETS.composer);
+// A video from the composer: its prompt, and its references as the first frame or the people and things to keep.
+// The composer's references go as the video's references.
+$('#video-open').onclick = () => gpuUi.open({ prompt: $('#prompt').value, pictures: state.refs.slice(0, 9).map(r => r.id ? { id: r.id, width: r.width, height: r.height } : { data: r.data, src: r.data, width: r.width, height: r.height }).filter(f => f.id || f.data) });
 
 // ---------------------------------------------------------------------------
 // Mentions: @1, @2… in a prompt. Typing @ opens a menu of the references; removing one renumbers the others.
@@ -1037,7 +1107,7 @@ const pickerTiles = new Map();
 function openPicker(target, { mention = null } = {}) {
   if (!state.unlocked || pickerDialog.open) return;
   const ids = target.list().filter(r => r.id);
-  Object.assign(picker, { target, mention, selected: [...new Set(ids.map(r => r.id))], known: new Map(ids.map(r => [r.id, r])), items: [], filter: 'all', search: '', group: state.gallery.group, hasMore: false });
+  Object.assign(picker, { target, mention, selected: [...new Set(ids.map(r => r.id))], known: new Map(ids.map(r => [r.id, r])), items: [], filter: 'all', search: '', group: state.gallery.group && target.kind !== 'video', hasMore: false });
   $('#picker-search').value = ''; $('#picker-group').checked = picker.group;
   $$('[data-picker-filter]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.pickerFilter === 'all')));
   $('#picker-title').textContent = target.title || (target.offset ? t('References for the edit') : t('References from the gallery'));
@@ -1050,7 +1120,7 @@ async function loadPicker({ more = false } = {}) {
   const version = ++picker.version;
   picker.loading = true; $('#picker-loading').hidden = false;
   try {
-    const data = await api('gallery', undefined, { q: picker.search, favorite: picker.filter === 'favorites' ? '1' : '0', trash: '0', kind: 'image',
+    const data = await api('gallery', undefined, { q: picker.search, favorite: picker.filter === 'favorites' ? '1' : '0', trash: '0', kind: picker.target.kind || 'image',
       offset: String(more ? picker.items.length : 0), limit: '60', group: picker.group ? '1' : '0' });
     if (version !== picker.version || !pickerDialog.open) return;
     picker.items = more ? [...picker.items, ...data.items] : data.items; picker.hasMore = data.has_more;
@@ -1071,12 +1141,13 @@ function pickerTile(item) {
   if (!tile) {
     const img = h('img', { alt: '', loading: 'lazy', decoding: 'async', draggable: 'false' }); img.src = imageUrl(item.id, true);
     tile = h('button', { type: 'button', class: 'pick', 'data-id': item.id, 'aria-pressed': 'false', onclick: () => togglePick(item.id) },
-      img, h('span', { class: 'tile-caption', 'aria-hidden': 'true' }), h('span', { class: 'pick-mark', 'aria-hidden': 'true' }));
+      img, h('span', { class: 'tile-caption', 'aria-hidden': 'true' }), h('span', { class: 'pick-mark', 'aria-hidden': 'true' }),
+      isVideo(item) ? h('span', { class: 'pick-duration', 'aria-hidden': 'true' }, icon('play'), clock(Math.round(item.duration || 0))) : '');
     pickerTiles.set(item.id, tile);
   }
   tile.style.setProperty('--ar', (item.width / item.height).toFixed(4));
   const text = displayText(item);
-  tile.dataset.label = snippet(text, 60) || t('Image');
+  tile.dataset.label = snippet(text, 60) || (isVideo(item) ? t('Video') : t('Image'));
   $('.tile-caption', tile).textContent = snippet(text, 140);
   return tile;
 }
@@ -1086,7 +1157,8 @@ function renderPicker() {
   $('#picker-empty').hidden = !empty;
   if (empty) {
     const [title, detail] = picker.search ? [t('Nothing found'), t('No prompt contains “{search}”.', { search: snippet(picker.search, 40) })]
-      : picker.filter === 'favorites' ? [t('No favorites'), ''] : [t('The gallery is empty'), t('Generate or import images to use them as references.')];
+      : picker.filter === 'favorites' ? [t('No favorites'), ''] : picker.target.kind === 'video' ? [t('No videos yet'), t('Import or drag in a video (MP4, MOV or WebM), or make one.')]
+      : [t('The gallery is empty'), t('Generate or import images to use them as references.')];
     $('#picker-empty').replaceChildren(icon('image'), h('strong', {}, title), detail ? h('span', {}, detail) : '');
   }
   updatePicker();
@@ -1097,7 +1169,7 @@ function pickerResult() {
   const kept = picker.target.list().filter(r => { if (!r.id) return true; if (!chosen.has(r.id) || seen.has(r.id)) return false; seen.add(r.id); return true; });
   const added = picker.selected.filter(id => !seen.has(id)).map(id => {
     const item = picker.known.get(id) || {};
-    return { id, name: snippet(displayText(item), 60) || t('Image from the gallery'), width: item.width, height: item.height };
+    return { id, name: snippet(displayText(item), 60) || (isVideo(item) ? t('Video') : t('Image from the gallery')), width: item.width, height: item.height, ...(isVideo(item) ? { duration: item.duration || 0 } : {}) };
   });
   return { list: [...kept, ...added], added };
 }
@@ -1119,6 +1191,11 @@ function updatePicker() {
     tile.setAttribute('aria-label', state_ ? `${tile.dataset.label} (${state_})` : tile.dataset.label);
   }
   const count = picker.selected.length, cited = picker.selected.map(id => numbers.get(id)).sort((a, b) => a - b).map(n => `@${n}`);
+  if (target.kind === 'video') {
+    $('#picker-status').textContent = !count ? t('Select one or more videos (up to {max}).', { max: pickerRoom() }) : plural(count, t('{n} video selected.'), t('{n} videos selected.'));
+    $('#picker-done').textContent = count ? plural(count, t('Use {n} video'), t('Use {n} videos')) : t('Done');
+    return;
+  }
   $('#picker-status').textContent = !count ? t('Select one or more images (up to {max}).', { max: pickerRoom() })
     : target.mentions === false ? plural(count, t('{n} image selected.'), t('{n} images selected.'))
     : plural(count, t('{n} image selected. In the prompt: {cited}.', { cited: listText(cited) }), t('{n} images selected. In the prompt: {cited}.', { cited: listText(cited) }));
@@ -1127,7 +1204,7 @@ function updatePicker() {
 function togglePick(id) {
   const index = picker.selected.indexOf(id);
   if (index >= 0) picker.selected.splice(index, 1);
-  else if (picker.selected.length >= pickerRoom()) { toast(picker.target.mentions === false ? t('Up to {max} images.', { max: picker.target.max }) : picker.target.offset ? t('Use up to {max} references besides the edited image.', { max: picker.target.max }) : t('Use up to {max} references.', { max: picker.target.max })); return; }
+  else if (picker.selected.length >= pickerRoom()) { toast(picker.target.kind === 'video' ? t('Up to {max} videos.', { max: picker.target.max }) : picker.target.mentions === false ? t('Up to {max} images.', { max: picker.target.max }) : picker.target.offset ? t('Use up to {max} references besides the edited image.', { max: picker.target.max }) : t('Use up to {max} references.', { max: picker.target.max })); return; }
   else picker.selected.push(id);
   updatePicker();
 }
@@ -1159,7 +1236,7 @@ $('#picker-group').onchange = () => { picker.group = $('#picker-group').checked;
 
 $('#generate-form').onsubmit = async e => {
   e.preventDefault(); setError('#generate-error');
-  if (!state.has_key) { showSettings(); return; }
+  if (needsKey($('#model').value)) { showSettings(); return; }
   const prompt = $('#prompt').value.trim();
   if (!prompt) { setError('#generate-error', t('Write what you want to generate.')); $('#prompt').focus(); return; }
   const unmatched = mentionError(REF_TARGETS.composer, prompt);
@@ -1168,8 +1245,9 @@ $('#generate-form').onsubmit = async e => {
   const linesError = lines && checkLines(lines);
   if (linesError) { setError('#generate-error', linesError); $('#vary-lines').focus(); return; }
   const options = composerOptions();
-  if (state.ratio === 'custom' && !validSize(Number($('#width').value), Number($('#height').value))) {
-    setError('#generate-error', t('Invalid custom size: use multiples of 16, an aspect ratio up to 3:1, up to 3,840 px per side and between 0.66 and 8.3 megapixels.')); return;
+  if (state.ratio === 'custom' && !validSize(Number($('#width').value), Number($('#height').value), limitsOf(options.model))) {
+    setError('#generate-error', isGpu(options.model) ? t('Invalid custom size: use whole pixels, from 64 to 12,000 per side, up to 40 megapixels and an aspect ratio up to 5:1.')
+      : t('Invalid custom size: use multiples of 16, an aspect ratio up to 3:1, up to 3,840 px per side and between 0.66 and 8.3 megapixels.')); return;
   }
   const button = $('#generate'); button.disabled = true;
   try {
@@ -1241,7 +1319,8 @@ function launch(id) {
     .finally(() => { state.launching.delete(id); schedulePoll(300); });
 }
 function launchQueued() {
-  const jobs = [...state.jobs.values()];
+  // Video requests wait for the GPU worker, which takes them from the server itself.
+  const jobs = [...state.jobs.values()].filter(j => !j.runner);
   const busy = jobs.filter(j => j.status === 'running' || j.status === 'cancelling' || (j.status === 'queued' && state.launching.has(j.id))).length;
   let free = state.maxParallel - busy;
   for (const job of jobs.filter(j => j.status === 'queued' && !state.launching.has(j.id) && !j.launchError).sort((a, b) => a.created - b.created)) {
@@ -1380,8 +1459,24 @@ function countLeaving() {
   }
   watchFailures();
 }
+/**
+ * A video request in the window again: its prompt, options and what it came from in the library. Pictures from the
+ * device and sounds stay with the request, so they are not copied.
+ */
+function reuseVideo(job) {
+  const size = id => ({ id, width: itemById(id)?.width, height: itemById(id)?.height, duration: itemById(id)?.duration });
+  const inputs = job.inputs || [], o = job.options || {};
+  const source = inputs.find(i => i.kind === 'video' && i.role === 'source');
+  gpuUi.open({ prompt: job.prompt, options: o, op: o.op || null,
+    pictures: inputs.filter(i => i.kind === 'image' && i.role === 'ref' && i.id).map(i => size(i.id)),
+    keys: inputs.filter(i => i.kind === 'image' && i.role === 'key' && i.id).map(i => ({ ...size(i.id), at: i.at })),
+    videos: inputs.filter(i => i.kind === 'video' && i.role === 'ref').map(i => ({ ...size(i.id), duration: i.duration })),
+    source: source ? { ...size(source.id), duration: source.duration } : null });
+  if (inputs.some(i => i.kind === 'audio' || (i.kind === 'image' && !i.id))) toast(t('Prompt and options copied. The sounds and the pictures from the device were not copied.'));
+}
 function useJobPrompt(job) {
   closeViewer();
+  if (job.kind === 'video') { reuseVideo(job); return; }
   if (state.section !== 'images') setSection('images');
   applyOptions(job.options); persistComposer();
   $('#prompt').value = job.prompt; autoGrow($('#prompt')); updateGenerateLabel();
@@ -1391,6 +1486,7 @@ function useJobPrompt(job) {
 
 function phaseText(job) {
   if (job.launchError) return t('Did not start');
+  if (job.runner === 'gpu') return gpuUi.phase(job);
   if (job.status === 'queued') {
     const ahead = [...state.jobs.values()].filter(j => j.status === 'queued' && j.created < job.created).length;
     return ahead ? t('Queued · #{n}', { n: ahead + 1 }) : t('Queued');
@@ -1785,12 +1881,23 @@ function parentAspect(job) {
   const parent = job.parent_id && (itemById(job.parent_id) || viewer.lineage?.nodes.find(n => n.id === job.parent_id));
   return parent ? parent.width / parent.height : 1;
 }
+/** The shape a request's tile takes: the image size it asks for, or a video's aspect (its first frame's when it has one). */
+function jobAspect(job) {
+  if (job.kind === 'video') {
+    // The shape of the video it comes from, else of its earliest pinned picture (as the worker takes it), else the one asked.
+    const inputs = job.inputs || [], at = i => i.at === 'end' ? Infinity : Number(i.at || 0);
+    const from = inputs.find(i => i.role === 'source') || inputs.filter(i => i.kind === 'image' && i.role === 'key').sort((a, b) => at(a) - at(b))[0];
+    const shape = from?.id ? itemById(from.id) : null;
+    return shape?.width && shape?.height ? shape.width / shape.height : aspectRatio(job.options?.aspect);
+  }
+  return aspectOf(job.options?.size, parentAspect(job));
+}
 function jobTiles(job) {
   // A finished request keeps its place until the gallery shows its images, so the feed never empties in between.
   if (job.status === 'completed' && (!job.image_ids?.length || job.image_ids.some(id => state.gallery.ids.has(id)))) return [];
   // A request that failed or could not start is one card, however many images it asked for.
   const count = (!ACTIVE.has(job.status) && job.status !== 'completed') || job.launchError ? 1 : Math.min(job.options?.n || 1, 10);
-  const aspect = Math.min(3, Math.max(1 / 3, aspectOf(job.options?.size, parentAspect(job))));
+  const aspect = Math.min(3, Math.max(1 / 3, jobAspect(job)));
   const tiles = [];
   for (let k = 0; k < count; k++) {
     const key = `job:${job.id}:${k}`;
@@ -1815,7 +1922,7 @@ function renderJobTile(tile, job, index) {
   for (const name of ['failed', 'uncertain', 'stuck']) tile.classList.toggle(name, state_ === name);
   // Event handlers read the latest copy: polling replaces the job object.
   const latest = () => state.jobs.get(job.id) || job;
-  const structure = JSON.stringify(problem ? [state_, job.error, job.launchError] : ['active', index, job.parent_id, job.operation, job.label, job.prompt]);
+  const structure = JSON.stringify(problem ? [state_, job.error, job.launchError, job.kind] : ['active', index, job.parent_id, job.operation, job.label, job.prompt, job.kind]);
   if (tile.dataset.structure !== structure) {
     tile.dataset.structure = structure;
     tile.opener.setAttribute('aria-label', t('View request details: {request}', { request: snippet(job.label || job.prompt, 60) }));
@@ -1836,7 +1943,8 @@ function renderJobTile(tile, job, index) {
       const cancel = h('button', { type: 'button', class: 'icon-btn small', 'aria-label': t('Cancel request'), onclick: () => cancelJob(latest()) }, icon('close'));
       const status = h('div', { class: 'job-status' }, h('span', { class: 'spinner small' }), h('span', { class: 'phase' }),
         h('span', { class: 'job-time', 'data-elapsed': job.id }, clock(now() - job.created)), cancel);
-      const kind = job.parent_id ? h('span', { class: 'job-kind' }, thumbOf(job.parent_id, 'parent'), OPERATION[job.operation] || t('Edit')) : '';
+      const kind = job.kind === 'video' ? h('span', { class: 'job-kind' }, job.parent_ids?.length ? thumbOf(job.parent_ids[0], 'parent') : icon('video'), t('Video'))
+        : job.parent_id ? h('span', { class: 'job-kind' }, thumbOf(job.parent_id, 'parent'), OPERATION[job.operation] || t('Edit')) : '';
       const footer = h('div', { class: 'job-footer' }, index === 0 ? h('p', { class: 'job-signal', 'data-signal': job.id, hidden: true }) : '', kind, h('p', { class: 'job-prompt', title: job.prompt }, snippet(job.label || job.prompt, 160)));
       body.append(status, footer);
       tile.replaceChildren(...$$(':scope > img.preview', tile), tile.opener, body);
@@ -1863,7 +1971,7 @@ function selectingIn(el) { const s = getSelection(); return !!s && !s.isCollapse
 // Request details: prompt, options and progress of a request, open while it runs (with or without previews)
 // ---------------------------------------------------------------------------
 const jobDialog = $('#job-dialog');
-const JOB_TITLE = { generate: t('New image'), edit: t('Edit'), expand: t('Expansion'), upscale: t('Upscale') };
+const JOB_TITLE = { generate: t('New image'), edit: t('Edit'), expand: t('Expansion'), upscale: t('Upscale'), video: t('Video') };
 const JOB_ENDED = { completed: t('Ready', { ctx: 'image' }), failed: t('Failed'), uncertain: t('Interrupted'), cancelled: t('Cancelled') };
 /** `copy` opens the details of a request that may have left the screen already. */
 function openJobDetails(id, copy = null) {
@@ -1871,6 +1979,23 @@ function openJobDetails(id, copy = null) {
   jobView.job = job;
   renderJobDetails();
   if (!jobDialog.open) jobDialog.showModal();
+}
+/** What a video request asked for (gpu.js), then its seed, the GPU that made it and when it was asked. */
+function videoRows(job) {
+  const o = job.options || {}, made = job.made || {}, rows = gpuUi.rows(job);
+  if (made.seed !== undefined || o.seed !== null && o.seed !== undefined) rows.push([t('Seed'), String(made.seed ?? o.seed)]);
+  if (made.gpu) rows.push([t('GPU'), made.seconds ? t('{gpu}, in {time}', { gpu: made.gpu, time: clock(made.seconds) }) : made.gpu]);
+  rows.push([t('Request'), dateTime(job.created)]);
+  return rows;
+}
+/** How a picture was made on the GPU: its LoRAs, its seed and the GPU that made it, in how long. */
+function gpuPictureRows(o, made = {}) {
+  const rows = [];
+  if (o.loras?.length) rows.push(['LoRAs', o.loras.map(l => `${l.name || t('LoRA no longer in the list')} (${number(Math.round(Number(l.strength ?? 1) * 100) / 100)})`).join(', ')]);
+  const seed = made?.seed ?? o.seed;
+  if (seed !== null && seed !== undefined) rows.push([t('Seed'), String(seed)]);
+  if (made?.gpu) rows.push([t('GPU'), made.seconds ? t('{gpu}, in {time}', { gpu: made.gpu, time: clock(made.seconds) }) : made.gpu]);
+  return rows;
 }
 /** Rebuilds a part only when what it shows changed, so text being selected or copied is never replaced. */
 function rebuild(el, key, build) {
@@ -1882,7 +2007,7 @@ function renderJobDetails() {
   if (!jobView.job) return;
   const job = state.jobs.get(jobView.job.id) || jobView.job; jobView.job = job;
   const latest = () => state.jobs.get(job.id) || jobView.job;
-  const op = JOB_TITLE[job.operation] ? job.operation : 'generate';
+  const op = job.kind === 'video' ? 'video' : JOB_TITLE[job.operation] ? job.operation : 'generate';
   const o = job.options || {};
   const active = ACTIVE.has(job.status) && !job.launchError;
   const problem = !!job.launchError || ['failed', 'uncertain'].includes(job.status);
@@ -1915,8 +2040,11 @@ function renderJobDetails() {
 
   // The picture: the result, else the latest preview, else the image being changed, dimmed.
   const visual = $('#job-visual');
-  visual.style.setProperty('--ar', Math.min(3, Math.max(1 / 3, aspectOf(o.size, parentAspect(job)))).toFixed(4));
-  const src = done ? imageUrl(job.image_ids[0], true) : job.previews ? previewUrl(job.id, job.previews) : job.parent_id ? imageUrl(job.parent_id, true) : null;
+  visual.style.setProperty('--ar', Math.min(3, Math.max(1 / 3, jobAspect(job))).toFixed(4));
+  // A video shows, until it is made, the picture it starts on or the video it comes from.
+  const videoStart = op === 'video' ? (job.inputs || []).find(i => i.id && (i.role === 'source' || i.kind === 'image' && i.role === 'key' && i.at === 0)) : null;
+  const firstFrame = videoStart?.id || null;
+  const src = done ? imageUrl(job.image_ids[0], true) : job.previews ? previewUrl(job.id, job.previews) : job.parent_id ? imageUrl(job.parent_id, true) : firstFrame ? imageUrl(firstFrame, true) : null;
   if (src) setPreview(visual, src);
   else if (visual.dataset.preview) { delete visual.dataset.preview; $$('img.preview', visual).forEach(i => i.remove()); }
   const source = !!src && !done && !job.previews;
@@ -1924,30 +2052,35 @@ function renderJobDetails() {
   visual.classList.toggle('busy', active);
   $('.spinner', visual).hidden = !active || !!job.previews;
   const label = $('#job-visual-label');
-  label.hidden = !source; setText(label, op === 'edit' ? t('Edited image') : t('Source image'));
+  label.hidden = !source; setText(label, op === 'edit' ? t('Edited image') : op === 'video' ? (videoStart?.role === 'source' ? t('Original video') : t('First frame')) : t('Source image'));
 
   // Gallery images used as references (the image being changed is the picture above).
-  const refs = fixed ? [] : (job.parent_ids || []).filter(id => id !== job.parent_id);
+  const refs = fixed ? [] : (job.parent_ids || []).filter(id => id !== job.parent_id && id !== firstFrame);
   $('#job-refs').hidden = !refs.length;
   rebuild($('#job-refs'), refs, () => refs.map(id => thumbOf(id, 'job')));
 
   const model = state.models[o.model];
   const extra = Math.max(0, (job.reference_count || 0) - (job.parent_id ? 1 : 0));
+  if (op === 'video') {
+    rebuild($('#job-details'), [o, job.made, job.created], () => videoRows(job).flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+  } else {
   const rows = [[t('Model'), model?.label || o.model || ''], [t('Quality'), [...QUALITY, ...QUALITY_EXTENDED].find(([v]) => v === o.quality)?.[1] || o.quality || '']];
   if (model?.complexity && o.complexity) rows.push([t('Complexity'), COMPLEXITY.find(([v]) => v === o.complexity)?.[1] || o.complexity]);
   rows.push([t('Size'), o.size === 'auto' || !o.size ? t('Automatic', { ctx: 'size' }) : String(o.size).replace('x', ' × ')]);
   if (o.format) rows.push([t('Format'), String(o.format).toUpperCase()]);
-  if (o.thinking && o.thinking !== 'off' && !fixed) rows.push([t('Prompt planning'), THINKING.find(([v]) => v === o.thinking)?.[1] || o.thinking]);
+  if (o.thinking && o.thinking !== 'off' && !fixed) rows.push([t('Prompt planning'), job.runner === 'gpu' ? t('MiniMax\'s expander') : THINKING.find(([v]) => v === o.thinking)?.[1] || o.thinking]);
   if (job.variation) rows.push([t('Variation'), t('{index} of {count}{label}', { index: job.variation.index, count: job.variation.count, label: !job.variation.planned && !job.variation.written && job.variation.label ? `: ${job.variation.label}` : '' })]);
-  rows.push([t('Previews'), o.previews ? String(o.previews) : t('Off', { ctx: 'previews' })]);
+  if (job.runner === 'gpu') rows.push(...gpuPictureRows(o, job.made));
+  else rows.push([t('Previews'), o.previews ? String(o.previews) : t('Off', { ctx: 'previews' })]);
   if (extra && !fixed) rows.push([job.parent_id ? t('Extra references') : t('References'), String(extra)]);
   if (job.has_mask && op === 'edit') rows.push([t('Area'), t('Only the marked area')]);
   if (job.cleaned) rows.push([t('Before sending'), cleanedNote(job.cleaned)]);
   rows.push([t('Request'), dateTime(job.created)]);
   rebuild($('#job-details'), rows, () => rows.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+  }
 
   const actions = [];
-  if (done) actions.push(['view', 'btn primary small', 'image', t('View image'), () => { jobDialog.close(); openViewer(job.image_ids[0], { history: viewerDialog.open ? 'replace' : 'push' }); }]);
+  if (done) actions.push(['view', 'btn primary small', op === 'video' ? 'video' : 'image', op === 'video' ? t('View video') : t('View image'), () => { jobDialog.close(); openViewer(job.image_ids[0], { history: viewerDialog.open ? 'replace' : 'push' }); }]);
   if (!fixed && op === 'edit' && job.parent_id) actions.push(['edit', 'btn secondary small', 'pencil', t('Use in the edit'), () => useInEdit(latest())]);
   else if (!fixed) actions.push(['reuse', 'btn secondary small', 'compose', t('Use prompt'), () => { const current = latest(); jobDialog.close(); useJobPrompt(current); }]);
   if (job.launchError) actions.push(['launch', 'btn secondary small', 'redo', t('Try to start'), () => launch(job.id)]);
@@ -2697,7 +2830,7 @@ async function openViewer(id, { history: mode = 'push', at = null, immersive = f
 function closeViewer() { if (viewerDialog.open) viewerDialog.close(); }
 /** Another image is about to show: Ampliar, Expandir and the brush were about the one before. Fotorrealista, Melhorar and Limpar stay chosen. */
 function leaveStageMode() {
-  if (viewer.action === 'expand' || viewer.action === 'upscale') setAction(null);
+  if (viewer.action === 'expand' || viewer.action === 'crop' || viewer.action === 'upscale') setAction(null);
   else if (viewer.mode !== 'view') setMode('view');
 }
 viewerDialog.addEventListener('cancel', e => {
@@ -3359,7 +3492,10 @@ function renderInfo() {
     rows.push([t('Model'), model?.label || o.model], [t('Quality'), [...QUALITY, ...QUALITY_EXTENDED].find(([v]) => v === o.quality)?.[1] || o.quality]);
     if (model?.complexity) rows.push([t('Complexity'), COMPLEXITY.find(([v]) => v === o.complexity)?.[1] || o.complexity]);
     rows.push([t('Format'), String(o.format || '').toUpperCase()]);
-    if (o.thinking && o.thinking !== 'off') rows.push([t('Planning'), `${THINKING.find(([v]) => v === o.thinking)?.[1] || o.thinking}${PLANNING_SKIPPED[item.planning_skipped] ? `: ${PLANNING_SKIPPED[item.planning_skipped]}` : ''}`]);
+    const gpu = model?.provider === 'gpu' || !!item.made?.gpu;
+    if (o.thinking && o.thinking !== 'off') rows.push([t('Planning'), gpu ? (item.planning_skipped ? t('MiniMax\'s expander failed, made with the prompt as written') : t('MiniMax\'s expander'))
+      : `${THINKING.find(([v]) => v === o.thinking)?.[1] || o.thinking}${PLANNING_SKIPPED[item.planning_skipped] ? `: ${PLANNING_SKIPPED[item.planning_skipped]}` : ''}`]);
+    if (gpu) rows.push(...gpuPictureRows(o, item.made));
     if (item.variation) rows.push([t('Variation'), t('{index} of {count}{label}', { index: item.variation.index, count: item.variation.count, label: item.variation.planned || item.variation.written ? '' : `: ${item.variation.label}` })]);
     if (item.cleaned) rows.push([t('Before sending'), cleanedNote(item.cleaned)]);
     const tokens = (item.usage?.total_tokens || 0) + (item.planning_usage?.total_tokens || 0) + (item.variation_usage?.total_tokens || 0);
@@ -3395,6 +3531,7 @@ function addReference(item) {
   toast(existing < 0 ? t('Added to the references as @{n}.', { n: state.refs.length }) : t('Already in the references as @{n}.', { n: existing + 1 }));
 }
 $('#as-reference').onclick = () => { if (viewer.item) addReference(viewer.item); };
+$('#animate-open').onclick = () => { const item = viewer.item; if (item) gpuUi.open({ prompt: $('#edit-prompt').value, keys: [{ at: 0, id: item.id, width: item.width, height: item.height }] }); };
 $('#open-video').onclick = () => { const source = viewer.item?.source; if (source?.video_id) openViewer(source.video_id, { history: 'replace', at: source.time }); };
 
 // Edit panel. One box of text and one button serve every request about the image: a plain edit, or one of the
@@ -3409,7 +3546,9 @@ function renderEditPanel() {
   syncProviderFields(state.models[$('#edit-model').value], { previews: $('#edit-previews') });
   $('#edit-quality').value = qualities(model).some(([v]) => v === prefs.quality) ? prefs.quality : 'high';
   $('#edit-quantity').value = String(Math.min(10, prefs.editN || 1));
-  $('#edit-complexity').value = prefs.complexity; $('#edit-previews').value = String(prefs.previews); $('#edit-thinking').value = prefs.thinking;
+  $('#edit-complexity').value = prefs.complexity; $('#edit-previews').value = String(prefs.previews);
+  syncThinking($('#edit-thinking'), model); $('#edit-thinking').value = prefs.thinking; if (!$('#edit-thinking').value) $('#edit-thinking').value = 'off';
+  loraChoice.edit = loraCopy(prefs.loras); renderLoraFields();
   renderCleanBefore();
   // Lines being written stay when another version opens, like the text in the box.
   if (varyForms.edit.mode !== 'lines') varyForms.edit.mode = prefs.vary === false ? 'same' : 'auto';
@@ -3422,24 +3561,27 @@ function updateEditCost() {
   const item = viewer.item; if (!item) return;
   const action = viewer.action;
   if (action === 'upscale') { updateUpscaleCost(); return; }
-  if (action === 'expand') { updateExpandCost(); return; }
+  if (action === 'expand' || action === 'crop') { updateExpandCost(); return; }
   if (action === 'clean') { const note = $('#edit-cost'); note.hidden = false; note.textContent = t('No cost: the cleanup runs on this device.'); note.title = ''; return; }
   const o = editOptions(item);
   // A ready-made request goes as written (no planning) and takes only the image itself.
   if (action) showCost('#edit-cost', { model: o.model, quality: o.quality, size: o.size, n: o.n, previews: o.previews, planning: [],
     inputs: [[item.width, item.height]], promptLength: withNotes(ACTIONS[action].prompt, boxNotes()).length });
   else {
-    const redo = viewer.maskPainted && !$('#edit-prompt').value.trim();
+    const redo = viewer.maskPainted && !$('#edit-prompt').value.trim(), cover = viewer.maskPainted && brushCovers();
     showCost('#edit-cost', { model: o.model, quality: o.quality, size: o.size, n: o.n, previews: o.previews, planning: redo ? [] : planningCalls(o, varyForms.edit.mode === 'auto' && o.n > 1),
-      inputs: [[item.width, item.height], ...viewer.refs.map(refSize)], promptLength: redo ? INPAINT_PROMPT.length : $('#edit-prompt').value.length });
+      inputs: [[item.width, item.height], ...viewer.refs.map(refSize)], promptLength: redo ? (cover ? FILL_PROMPT : INPAINT_PROMPT).length : (cover ? COVER_NOTE.length : 0) + $('#edit-prompt').value.length });
   }
 }
 function persistEdit() {
   renderVary('edit'); updateEditCost(); renderPresets('edit');
   savePrefs({ edit: { model: $('#edit-model').value, quality: $('#edit-quality').value, editN: Number($('#edit-quantity').value), complexity: $('#edit-complexity').value,
-    previews: Number($('#edit-previews').value), thinking: $('#edit-thinking').value, vary: varyForms.edit.mode !== 'same' } });
+    previews: Number($('#edit-previews').value), thinking: $('#edit-thinking').value, vary: varyForms.edit.mode !== 'same', loras: loraChoice.edit } });
 }
-$('#edit-model').onchange = () => { syncModelFields($('#edit-model'), $('#edit-quality'), $('#edit-complexity')); syncProviderFields(state.models[$('#edit-model').value], { previews: $('#edit-previews') }); persistEdit(); };
+$('#edit-model').onchange = () => {
+  syncModelFields($('#edit-model'), $('#edit-quality'), $('#edit-complexity')); syncProviderFields(state.models[$('#edit-model').value], { previews: $('#edit-previews') });
+  syncThinking($('#edit-thinking'), $('#edit-model').value); renderLoraFields(); persistEdit();
+};
 for (const s of ['#edit-quality', '#edit-quantity', '#edit-complexity', '#edit-previews', '#edit-thinking']) $(s).addEventListener('change', persistEdit);
 function renderEditRefs() { renderRefList(REF_TARGETS.edit); renderBox(); updateEditCost(); }
 // References only go with a plain edit: adding one goes back to it.
@@ -3450,11 +3592,20 @@ $('#edit-gallery-refs').onclick = () => openPicker(REF_TARGETS.edit);
 acceptDrops($('#edit-drop'), addEditRefs); acceptPaste($('#edit-prompt'), addEditRefs);
 $('#edit-prompt').addEventListener('input', () => { autoGrow($('#edit-prompt')); renderBox(); updateEditCost(); });
 $('#edit-clear').onclick = () => { const box = $('#edit-prompt'); box.value = ''; box.dispatchEvent(new Event('input', { bubbles: true })); if (!box.disabled) box.focus(); };
+/**
+ * The options of a request about an image: its own (format, background…), with what the panel chose. The seed and the
+ * LoRAs of the image are not carried over: a model on the GPU takes the edit panel's LoRAs, and keeps the shape of the
+ * image being changed (Auto).
+ */
+function sourceOptions(item) {
+  const { seed, loras, engine, ...base } = { ...DEFAULT_OPTIONS, ...(item.options || {}) };
+  return base;
+}
 function editOptions(item) {
-  const base = { ...DEFAULT_OPTIONS, ...(item.options || {}) };
-  const model = $('#edit-model').value;
-  return { ...base, model, quality: $('#edit-quality').value, n: Number($('#edit-quantity').value), complexity: $('#edit-complexity').value,
-    previews: Number($('#edit-previews').value), thinking: $('#edit-thinking').value, vary: varyForms.edit.mode !== 'same', size: editSize(item.width, item.height, state.models[model]?.flex) };
+  const model = $('#edit-model').value, gpu = isGpu(model);
+  return { ...sourceOptions(item), model, quality: $('#edit-quality').value, n: Number($('#edit-quantity').value), complexity: $('#edit-complexity').value,
+    previews: Number($('#edit-previews').value), thinking: $('#edit-thinking').value, vary: varyForms.edit.mode !== 'same',
+    size: gpu ? 'auto' : editSize(item.width, item.height, state.models[model]?.flex), ...(gpu ? { loras: chosenLoras('edit') } : {}) };
 }
 $('#edit-clean').onchange = () => setCleanBefore($('#edit-clean').value);
 /**
@@ -3471,10 +3622,11 @@ $('#edit-form').onsubmit = async e => {
   const item = viewer.item, action = viewer.action; if (!item || item.id !== viewer.id) return;
   if ($('#edit-submit').disabled) return;
   if (action === 'clean') { await submitClean($('#edit-submit')); return; }
-  // A crop is made on this device, like Limpar: it needs no API key.
-  if (!state.has_key && !(action === 'expand' && expansionKind() === 'crop')) { showSettings(); return; }
+  // A crop is made on this device, like Limpar: it needs no API key. The GPU's models need the worker token instead.
+  const using = action === 'expand' ? $('#expand-model').value : action === 'upscale' ? $('#upscale-model').value : $('#edit-model').value;
+  if (needsKey(using) && !(action === 'crop' || (action === 'expand' && expansionKind() === 'crop'))) { showSettings(); return; }
   if (action) {
-    const sent = action === 'upscale' ? await submitUpscale() : action === 'expand' ? await submitExpansion() : await submitPreset(action);
+    const sent = action === 'upscale' ? await submitUpscale() : action === 'expand' ? await submitExpansion() : action === 'crop' ? await submitCrop(true) : await submitPreset(action);
     // Sent: the request stays chosen. The result of Fotorrealista or Melhorar opens when it is ready, and they stay chosen
     // there; Ampliar and Expandir are about the image on the stage, so they stay on it and a message offers the result.
     if (sent) { viewer.editTyped = false; renderVersions(); }
@@ -3491,12 +3643,16 @@ $('#edit-form').onsubmit = async e => {
   if (linesError) { setError('#edit-error', linesError); $('#edit-vary-lines').focus(); return; }
   const button = $('#edit-submit'); button.disabled = true;
   try {
-    const mask = viewer.maskPainted ? buildMask() : null;
+    const mask = viewer.maskPainted ? buildMask() : null, cover = !!mask && brushCovers();
     // The ready-made instruction goes as written, like Fotorrealista and Melhorar: no planning, every image the same request.
-    const request = redo ? { prompt: INPAINT_PROMPT, label: t('Area redone'), options: { ...editOptions(item), thinking: 'off', vary: false } } : { prompt, options: editOptions(item) };
+    const ready = { options: { ...editOptions(item), thinking: 'off', vary: false } };
+    const request = redo ? (cover ? { ...ready, prompt: FILL_PROMPT, label: t('Covered area filled') } : { ...ready, prompt: INPAINT_PROMPT, label: t('Area redone') })
+      : cover ? { prompt: COVER_NOTE + prompt, typed: prompt, label: t('Covered area: {text}', { text: prompt.replace(/\s+/g, ' ') }), options: editOptions(item) }
+      : { prompt, options: editOptions(item) };
     // With an area marked the image goes as it is, never cleaned first: what is outside the area comes back as it was
-    // sent, so a cleaned image would come back soft all over.
-    await submitJob({ ...request, references: [mask ? { id: item.id } : await sourceReference(item), ...refsPayload(viewer.refs)], mask, parent_id: item.id, operation: 'edit', ...(lines ? { lines } : {}) });
+    // sent, so a cleaned image would come back soft all over. A covered area goes erased (coveredReference).
+    const source = cover ? await coveredReference(item) : mask ? { id: item.id } : await sourceReference(item);
+    await submitJob({ ...request, references: [source, ...refsPayload(viewer.refs)], mask, parent_id: item.id, operation: 'edit', ...(lines ? { lines } : {}) });
     viewer.editTyped = false;
     persistEdit();
     // The request now shows up in the version tree. A painted area stays, to send again; the result is offered by a
@@ -3748,6 +3904,11 @@ const ACTIONS = {
     empty: t('If you want to ask for an improvement, write it in the box above.'),
     // With Fotorrealista the text goes as its notes, with priority (upscalePrompt).
     filled: () => upscaleWith() === 'photoreal' ? t('The text in the box goes along as a note for Photoreal and has priority, even if it changes something.') : t('The text in the box goes along as a requested improvement.') },
+  // Recortar: a frame inside the image keeps only a part of it, made on this device. The cropped image opens, to be
+  // edited or expanded from there (an expansion then never sees what was cut off).
+  crop: { tile: '#crop-open', local: true, icon: 'crop', title: t('Crop', { ctx: 'action' }), go: t('Crop', { ctx: 'action' }), quality: false, quantity: false,
+    hint: t('Keep only a part of the image: pull the frame\'s handles or pick a proportion, and drag the image to place it. Made on this device, at no cost; the cropped image opens as a new version, ready to edit or expand.'),
+    placeholder: t('A crop does not use text'), empty: '', filled: t('A crop does not use the text in the box.') },
   // The frame crops, extends, or both (outpaint.js): the button and what the text does follow what the frame is doing.
   expand: { tile: '#expand-open', icon: 'expand', title: t('Crop and expand'), quality: false, quantity: false,
     go: () => ({ crop: t('Crop', { ctx: 'action' }), both: t('Crop and expand') })[expansionKind()] || t('Expand'),
@@ -3772,7 +3933,7 @@ const EDIT_ONLY_TOOLS = ['#brush-toggle', '#edit-file-open', '#edit-gallery-refs
 function setAction(name) {
   name = name || null;
   // The frame of Expandir is drawn from the picture on the stage: the open version, never the one it is compared with.
-  if (name === 'expand' && viewer.compare) {
+  if ((name === 'expand' || name === 'crop') && viewer.compare) {
     const token = viewer.token;
     $('#compare').onclick().then(() => { if (viewer.token === token && !viewer.compare) setAction(name); });
     return;
@@ -3781,8 +3942,9 @@ function setAction(name) {
   viewer.action = name;
   setError('#edit-error');
   // Ampliar and Expandir also change what the stage shows; an area being marked belongs to a plain edit.
-  const stage = name === 'expand' || name === 'upscale' ? name : !name && viewer.mode === 'mask' ? 'mask' : 'view';
+  const stage = name === 'expand' || name === 'crop' ? 'expand' : name === 'upscale' ? 'upscale' : !name && viewer.mode === 'mask' ? 'mask' : 'view';
   if (viewer.mode !== stage) setMode(stage);
+  else if (stage === 'expand' && viewer.expansion && viewer.expansion.crop !== (name === 'crop')) startExpansion();
   renderAction();
   if (name && !ACTIONS[name].local && !matchMedia('(pointer: coarse)').matches) $('#edit-prompt').focus({ preventScroll: true });
 }
@@ -3791,8 +3953,10 @@ function renderBox() {
   const box = $('#edit-prompt'), a = ACTIONS[viewer.action], filled = !!box.value.trim();
   $('#edit-clear').hidden = !box.value;
   const said = value => (typeof value === 'function' ? value() : value);
-  box.placeholder = a ? a.placeholder : viewer.maskPainted ? t('What should appear in the marked area (optional). Left blank, that part is redone.') : REF_TARGETS.edit.placeholder[viewer.refs.length ? 1 : 0];
-  if (!$('#edit-submit').disabled || !a?.local) $('#edit-submit-label').textContent = a ? said(a.go) : viewer.maskPainted ? t('Redo area') : t('Generate edit');
+  const cover = brushCovers();
+  box.placeholder = a ? a.placeholder : viewer.maskPainted ? (cover ? t('What should appear in the covered area (optional). Left blank, it is filled with what surrounds it.') : t('What should appear in the marked area (optional). Left blank, that part is redone.')) : REF_TARGETS.edit.placeholder[viewer.refs.length ? 1 : 0];
+  if (!$('#edit-submit').disabled || viewer.action !== 'clean') $('#edit-submit-label').textContent = a ? said(a.go) : viewer.maskPainted ? (cover ? t('Fill area') : t('Redo area')) : t('Generate edit');
+  renderBrushMode(cover);
   if (!a) return;
   const note = said(filled ? a.filled : a.empty);
   $('#action-note').textContent = note;
@@ -3811,13 +3975,13 @@ function renderAction() {
   $('#edit-more').hidden = !!a?.local;
   $('#edit-quantity').hidden = !!a && !a.quantity;
   box.disabled = !!a?.local;
-  $('#edit-submit').disabled = name === 'upscale' ? !viewer.upscale : name === 'expand' ? !viewer.expansion || !!expansionError() : false;
+  $('#edit-submit').disabled = name === 'upscale' ? !viewer.upscale : name === 'expand' || name === 'crop' ? !viewer.expansion || !!expansionError() : false;
   $('#action-panel').hidden = !a;
   if (a) {
     $('#action-icon').replaceChildren(icon(a.icon)); $('#action-title').textContent = a.title; $('#action-hint').textContent = a.hint;
-    $('#preset-before').hidden = !a.before; $('#preset-levels').hidden = !a.local;
-    $('#upscale-options').hidden = name !== 'upscale'; $('#expand-options').hidden = name !== 'expand';
-    if (a.local) renderCleanLevel();
+    $('#preset-before').hidden = !a.before; $('#preset-levels').hidden = name !== 'clean';
+    $('#upscale-options').hidden = name !== 'upscale'; $('#expand-options').hidden = name !== 'expand' && name !== 'crop';
+    if (name === 'clean') renderCleanLevel();
   }
   renderBox(); renderVary('edit'); updateEditCost();
 }
@@ -3864,8 +4028,9 @@ function setMode(mode) {
   if (mode !== 'upscale') viewer.upscale = null;
   renderBox();
   if (mode !== previous && viewerDialog.open) fitStage();
-  // On a phone or a tablet the button is under the picture: the picture comes back to the screen to be painted.
-  if (mode === 'mask' && previous !== 'mask' && viewerDialog.open && matchMedia(STACKED).matches) $('.viewer-shell').scrollTo({ top: 0 });
+  // On a phone or a tablet the panel is under the picture: the picture comes back to the screen to be painted, or for
+  // the frame of Recortar and Expandir to be dragged.
+  if ((mode === 'mask' || mode === 'expand') && previous !== mode && viewerDialog.open && matchMedia(STACKED).matches) $('.viewer-shell').scrollTo({ top: 0 });
 }
 $('#brush-toggle').onclick = () => setMode(viewer.mode === 'mask' ? 'view' : 'mask');
 $('#mask-done').onclick = () => { setMode('view'); if (viewer.maskPainted) $('#edit-prompt').focus(); };
@@ -3873,10 +4038,59 @@ $('#mask-clear').onclick = () => { maskCtx.clearRect(0, 0, maskCanvas.width, mas
 // Paint and send from the same place: the area is made again, following the text of the box when there is some.
 $('#mask-go').onclick = () => { if (!viewer.maskPainted) { toast(t('First paint the area that should be redone.')); return; } $('#edit-form').requestSubmit(); };
 $('#mask-remove').onclick = () => { clearMask(); setMode(viewer.mode === 'mask' ? 'mask' : 'view'); };
+/**
+ * Cobrir, a setting of the brush: off, the area is only marked and the model sees what is in it (it redoes it from that);
+ * on, the area goes erased and the model draws it without seeing what was there. On the picture a covered area is
+ * painted solid with the checkered pattern of what is generated (as in Expandir); a marked one is a light blue veil.
+ */
+const brushCovers = () => state.prefs.brush?.cover === true;
+let coverInk = null;
+function maskInk() {
+  if (!brushCovers()) return '#8fa6ff';
+  // Squares of about 8 screen pixels at the size the picture is shown.
+  const shown = maskCanvas.getBoundingClientRect().width || maskCanvas.width;
+  const unit = Math.max(4, Math.round(8 * maskCanvas.width / shown));
+  if (coverInk?.unit !== unit) {
+    const tile = document.createElement('canvas'); tile.width = tile.height = unit * 2;
+    const g = tile.getContext('2d'); g.fillStyle = '#3a3a42'; g.fillRect(0, 0, unit * 2, unit * 2); g.fillStyle = '#2a2a30'; g.fillRect(0, 0, unit, unit); g.fillRect(unit, unit, unit, unit);
+    coverInk = { unit, pattern: maskCtx.createPattern(tile, 'repeat') };
+  }
+  return coverInk.pattern;
+}
+function renderBrushMode(cover = brushCovers()) {
+  maskCanvas.classList.toggle('cover', cover);
+  $('#mask-cover').setAttribute('aria-pressed', String(cover));
+  $('#brush-hint').textContent = cover ? t('Paint what the AI should not see') : t('Paint what should be redone');
+  $('#mask-go').textContent = cover ? t('Fill area') : t('Redo area');
+  $('#mask-go').title = cover ? t('Generate a new version with the painted area drawn from scratch, without the AI seeing what was there. The text in the box, if any, says what should appear in it; without text, it is filled with what surrounds it. (Ctrl+Enter)')
+    : t('Generate a new version with only the painted area redone. The text in the box, if any, says what should appear in it. (Ctrl+Enter)');
+  $('#mask-chip-text').textContent = cover ? t('Only the covered area') : t('Only the marked area');
+}
+$('#mask-cover').onclick = () => {
+  savePrefs({ brush: { ...state.prefs.brush, cover: !brushCovers() } });
+  // What is already painted takes the new ink: the area stays, only what it does changes.
+  if (viewer.maskPainted) { maskCtx.save(); maskCtx.globalCompositeOperation = 'source-in'; maskCtx.fillStyle = maskInk(); maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height); maskCtx.restore(); }
+  renderBox(); updateEditCost();
+};
+/** The image with the painted area erased (Cobrir): transparent there, so the model can't see what was in it. */
+async function coveredReference(item) {
+  const response = await fetch(imageUrl(item.id));
+  if (!response.ok) throw new Error(t('Could not load the image to cover the area.'));
+  const bitmap = await createImageBitmap(await response.blob());
+  if (bitmap.width !== maskCanvas.width || bitmap.height !== maskCanvas.height) { bitmap.close?.(); throw new Error(t('The painted area does not match this image. Paint it again.')); }
+  const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height;
+  const c = canvas.getContext('2d'); c.drawImage(bitmap, 0, 0); bitmap.close?.();
+  c.globalCompositeOperation = 'destination-out'; c.drawImage(maskCanvas, 0, 0);
+  // The erased area must stay transparent: a PNG, or for a large image a lossless WebP, never a JPEG.
+  let blob = await canvasBlob(canvas, 'image/png');
+  if (!blob || blob.size > CLEANED_LIMIT) { const webp = await canvasBlob(canvas, 'image/webp', 1); if (webp?.type === 'image/webp' && (!blob || webp.size < blob.size)) blob = webp; }
+  if (!blob || blob.size > 14 * 1024 * 1024) throw new Error(t('The image is too large to be sent with a covered area.'));
+  return { data: await blobData(blob), source_id: item.id };
+}
 function maskPoint(e) { const r = maskCanvas.getBoundingClientRect(); return { x: (e.clientX - r.left) * maskCanvas.width / r.width, y: (e.clientY - r.top) * maskCanvas.height / r.height }; }
 function paint(e) {
   const p = maskPoint(e);
-  maskCtx.strokeStyle = maskCtx.fillStyle = '#8fa6ff';
+  maskCtx.strokeStyle = maskCtx.fillStyle = maskInk();
   maskCtx.lineWidth = Number($('#brush-size').value) * maskCanvas.width / maskCanvas.getBoundingClientRect().width;
   maskCtx.lineCap = maskCtx.lineJoin = 'round';
   maskCtx.beginPath(); maskCtx.moveTo(lastPoint?.x ?? p.x, lastPoint?.y ?? p.y); maskCtx.lineTo(p.x, p.y); maskCtx.stroke();
@@ -3928,15 +4142,18 @@ let expansionDrag = null, newAreaPattern = null;
 const frameOf = e => ({ width: e.width, height: e.height, x: e.x, y: e.y });
 const imageSize = e => [e.image.naturalWidth, e.image.naturalHeight];
 function expansionKind() { const e = viewer.expansion; return e ? frameKind(e.width, e.height, e.x, e.y, ...imageSize(e)) : null; }
-function expansionError() { const e = viewer.expansion; return e ? validateFrame(e.width, e.height, e.x, e.y, ...imageSize(e)) : ''; }
+function expansionError() { const e = viewer.expansion; return e ? validateFrame(e.width, e.height, e.x, e.y, ...imageSize(e), limitsOf($('#expand-model').value)) : ''; }
 function startExpansion() {
   const item = viewer.item; const image = stageImage;
   if (!item || !image.naturalWidth) { viewer.action = null; setMode('view'); return; }
-  const iw = image.naturalWidth, ih = image.naturalHeight;
-  // It starts a quarter larger all around; where that is more than the image API generates, at the size of the image.
+  const iw = image.naturalWidth, ih = image.naturalHeight, crop = viewer.action === 'crop';
+  // Expandir starts a quarter larger all around; where that is more than the image API generates, at the size of the
+  // image. Recortar starts on the whole image.
   let frame = centerFrame({ width: snap16(iw * 1.25), height: snap16(ih * 1.25), x: 0, y: 0 }, iw, ih);
-  if (validateFrame(frame.width, frame.height, frame.x, frame.y, iw, ih)) frame = { width: iw, height: ih, x: 0, y: 0 };
-  viewer.expansion = { image, ...frame, view: null, tween: 0 };
+  if (crop || validateFrame(frame.width, frame.height, frame.x, frame.y, iw, ih)) frame = { width: iw, height: ih, x: 0, y: 0 };
+  viewer.expansion = { image, ...frame, crop, view: null, tween: 0 };
+  $('#expand-ratio-field').hidden = !crop;
+  for (const id of ['#expand-width', '#expand-height']) $(id).step = crop ? 1 : 16;
   const flexible = modelEntries(m => m.flex);
   const preferred = state.prefs.expand?.model || item.options?.model;
   fillSelect($('#expand-model'), flexible, flexible.some(([id]) => id === preferred) ? preferred : DEFAULT_OPTIONS.model);
@@ -3946,8 +4163,9 @@ function startExpansion() {
 /** Takes a new frame. One with new areas can't be larger than the image API generates. */
 function takeFrame(frame) {
   const e = viewer.expansion, [iw, ih] = imageSize(e);
-  if (frameKind(frame.width, frame.height, frame.x, frame.y, iw, ih) !== 'crop' && frameTooLarge(frame.width, frame.height) && frame.width * frame.height >= e.width * e.height) {
-    setError('#edit-error', t('With a new area, the canvas cannot go past 3,840 px per side or 8.29 MP.')); return false;
+  const limits = limitsOf($('#expand-model').value);
+  if (frameKind(frame.width, frame.height, frame.x, frame.y, iw, ih) !== 'crop' && frameTooLarge(frame.width, frame.height, limits) && frame.width * frame.height >= e.width * e.height) {
+    setError('#edit-error', limits.gpu ? t('With a new area, the canvas cannot go past 12,000 px per side or 40 MP.') : t('With a new area, the canvas cannot go past 3,840 px per side or 8.29 MP.')); return false;
   }
   Object.assign(e, frame); return true;
 }
@@ -3961,14 +4179,19 @@ function fitExpansion(animate) {
   const began = performance.now();
   const step = now => {
     if (viewer.expansion !== e) return;
-    const p = Math.min(1, (now - began) / 160), k = 1 - (1 - p) ** 3;
+    // The time of a frame can come a little before the moment the move began: it starts from where the view is.
+    const p = Math.max(0, Math.min(1, (now - began) / 160)), k = 1 - (1 - p) ** 3;
     e.view = { scale: from.scale + (target.scale - from.scale) * k, x: from.x + (target.x - from.x) * k, y: from.y + (target.y - from.y) * k };
     paintExpansion();
-    if (t < 1) e.tween = requestAnimationFrame(step);
+    if (p < 1) e.tween = requestAnimationFrame(step);
   };
   renderExpansion();
   e.tween = requestAnimationFrame(step);
 }
+const CROP_STATUS = {
+  same: t('The frame takes the whole image: pull its handles inward, or pick a proportion.'),
+  crop: t('What is outside the frame is removed. The cropped image opens as a new version.'),
+};
 const FRAME_STATUS = {
   same: t('The frame is the size of the image: pull a handle inward or outward.'),
   crop: t('Crop only: what is outside the frame is removed, and nothing is generated.'),
@@ -3980,8 +4203,15 @@ function renderExpansion() {
   const e = viewer.expansion; if (!e) return;
   const kind = expansionKind(), error = expansionError();
   $('#expand-width').value = e.width; $('#expand-height').value = e.height;
-  $('#expand-dimensions').textContent = FRAME_STATUS[kind];
-  $('#expand-engine').hidden = kind === 'crop';
+  $('#expand-dimensions').textContent = (e.crop ? CROP_STATUS : FRAME_STATUS)[kind];
+  $('#expand-engine').hidden = e.crop || kind === 'crop';
+  // The proportion the frame has right now, among those that crop with one tap.
+  const [iw, ih] = imageSize(e);
+  for (const b of $$('#expand-ratios button')) {
+    const [rw, rh] = b.dataset.crop.split(':').map(Number), to = ratioFrame(iw, ih, rw, rh);
+    b.setAttribute('aria-pressed', String(kind === 'crop' && hasRatio(e.width, e.height, rw, rh)));
+    b.disabled = frameKind(to.width, to.height, to.x, to.y, iw, ih) === 'same';
+  }
   // A frame at the size of the image is where a crop starts from, not a mistake: the line above says what to do.
   setError('#edit-error', kind === 'same' ? '' : error); $('#edit-submit').disabled = !!error;
   renderBox(); updateExpandCost();
@@ -4009,11 +4239,15 @@ function newAreas(context) {
   const g = tile.getContext('2d'); g.fillStyle = '#2a2a30'; g.fillRect(0, 0, 16, 16); g.fillStyle = '#222227'; g.fillRect(0, 0, 8, 8); g.fillRect(8, 8, 8, 8);
   return context.createPattern(tile, 'repeat');
 }
-$('#expand-model').onchange = () => { syncModelFields($('#expand-model'), $('#expand-quality'), null); updateExpandCost(); };
+$('#expand-model').onchange = () => {
+  syncModelFields($('#expand-model'), $('#expand-quality'), null);
+  for (const side of ['#expand-width', '#expand-height']) $(side).max = String(limitsOf($('#expand-model').value).side);
+  updateExpandCost(); renderAction();
+};
 $('#expand-quality').addEventListener('change', () => updateExpandCost());
 function updateExpandCost() {
   const e = viewer.expansion; if (!e) return;
-  if (expansionKind() === 'crop') { const note = $('#edit-cost'); note.hidden = false; note.textContent = t('No cost: the crop is made on this device.'); note.title = ''; return; }
+  if (e.crop || expansionKind() === 'crop') { const note = $('#edit-cost'); note.hidden = false; note.textContent = t('No cost: the crop is made on this device.'); note.title = ''; return; }
   showCost('#edit-cost', { model: $('#expand-model').value, quality: $('#expand-quality').value, size: `${e.width}x${e.height}`, previews: editPrefs().previews,
     inputs: [[e.width, e.height]], promptLength: $('#edit-prompt').value.length });
 }
@@ -4021,9 +4255,16 @@ for (const id of ['expand-width', 'expand-height']) $('#' + id).onchange = () =>
   const e = viewer.expansion; if (!e) return;
   const w = Number($('#expand-width').value), hh = Number($('#expand-height').value);
   if (!Number.isInteger(w) || !Number.isInteger(hh) || w < 16 || hh < 16) { setError('#edit-error', t('Use whole dimensions, from 16 px up.')); $('#edit-submit').disabled = true; return; }
-  if (takeFrame(sizeFrame(frameOf(e), w, hh, ...imageSize(e)))) fitExpansion(false); else $('#edit-submit').disabled = true;
+  const [iw, ih] = imageSize(e);
+  if (takeFrame(e.crop ? holdCrop({ ...frameOf(e), width: w, height: hh }, 0, 0, iw, ih) : sizeFrame(frameOf(e), w, hh, iw, ih))) fitExpansion(false); else $('#edit-submit').disabled = true;
 };
 $('#expand-center').onclick = () => { const e = viewer.expansion; if (!e) return; Object.assign(e, centerFrame(frameOf(e), ...imageSize(e))); fitExpansion(true); };
+// A proportion: the largest frame of that shape in the middle of the image, a crop. Dragging the image moves it.
+for (const b of $$('#expand-ratios button')) b.onclick = () => {
+  const e = viewer.expansion; if (!e) return;
+  const [rw, rh] = b.dataset.crop.split(':').map(Number);
+  Object.assign(e, ratioFrame(...imageSize(e), rw, rh)); fitExpansion(true);
+};
 // The frame at the size of the image: where a crop starts from.
 $('#expand-fit').onclick = () => { const e = viewer.expansion; if (!e) return; const [iw, ih] = imageSize(e); Object.assign(e, { width: iw, height: ih, x: 0, y: 0 }); fitExpansion(true); };
 function beginFrameDrag(type, ev) {
@@ -4035,7 +4276,9 @@ function frameDragged(ev) {
   const d = expansionDrag, e = viewer.expansion; if (!d || !e) return;
   ev.preventDefault();
   const [iw, ih] = imageSize(e), scale = d.view.scale, dx = (ev.clientX - d.startX) / scale, dy = (ev.clientY - d.startY) / scale, magnet = 8 / scale;
-  if (!takeFrame(d.type === 'move' ? panFrame(d.frame, dx, dy, iw, ih, magnet) : resizeFrame(d.frame, d.type, dx, dy, iw, ih, magnet))) return;
+  const frame = e.crop ? (d.type === 'move' ? holdCrop(d.frame, dx, dy, iw, ih) : resizeCrop(d.frame, d.type, dx, dy, iw, ih, magnet))
+    : d.type === 'move' ? panFrame(d.frame, dx, dy, iw, ih, magnet) : resizeFrame(d.frame, d.type, dx, dy, iw, ih, magnet);
+  if (!takeFrame(frame)) return;
   // A handle moves the frame over the image, which stays where it is; dragging the image moves it under the frame.
   e.view = d.type === 'move' ? { ...d.view } : { scale, x: d.imageX - e.x * scale, y: d.imageY - e.y * scale };
   renderExpansion();
@@ -4055,7 +4298,7 @@ $$('#expand-frame [data-corner]').forEach(handle => {
     if (!e || !move) return;
     ev.preventDefault(); ev.stopPropagation();
     const by = ev.shiftKey ? 1 : 16;
-    if (takeFrame(resizeFrame(frameOf(e), handle.dataset.corner, move[0] * by, move[1] * by, ...imageSize(e)))) fitExpansion(false);
+    if (takeFrame((e.crop ? resizeCrop : resizeFrame)(frameOf(e), handle.dataset.corner, move[0] * by, move[1] * by, ...imageSize(e)))) fitExpansion(false);
   };
 });
 expandCanvas.onpointerdown = ev => { if (!viewer.expansion || ev.button) return; ev.preventDefault(); expandCanvas.setPointerCapture(ev.pointerId); beginFrameDrag('move', ev); };
@@ -4080,7 +4323,7 @@ async function submitExpansion() {
   const instructions = boxNotes();
   const model = $('#expand-model').value, quality = $('#expand-quality').value;
   savePrefs({ expand: { model, quality } });
-  const options = { ...DEFAULT_OPTIONS, ...(item.options || {}), model, quality, n: 1, size: `${e.width}x${e.height}`, thinking: 'off', previews: editPrefs().previews };
+  const options = { ...sourceOptions(item), model, quality, n: 1, size: `${e.width}x${e.height}`, thinking: 'off', previews: editPrefs().previews };
   $('#edit-submit').disabled = true;
   try {
     await submitJob({ prompt: EXPAND_PROMPT + (instructions ? ' Instructions for the new areas: ' + instructions : ''), typed: instructions,
@@ -4090,8 +4333,11 @@ async function submitExpansion() {
   } catch (err) { setError('#edit-error', err.message); return false; }
   finally { $('#edit-submit').disabled = false; }
 }
-/** A crop: the part of the image inside the frame becomes a new version. Nothing goes to the image API. True once saved. */
-async function submitCrop() {
+/**
+ * A crop: the part of the image inside the frame becomes a new version. Nothing goes to the image API. True once saved.
+ * From Recortar (open) the cropped image opens, to edit or expand it next.
+ */
+async function submitCrop(open = false) {
   const e = viewer.expansion, item = viewer.item, button = $('#edit-submit'), label = $('#edit-submit-label');
   const kept = keptArea(e.width, e.height, e.x, e.y, ...imageSize(e));
   button.disabled = true;
@@ -4106,7 +4352,8 @@ async function submitCrop() {
     const { image } = await api('import', { data: await blobData(blob), parent_id: item.id, crop: true });
     fresh.add(image.id);
     await Promise.all([refreshAfterJobs(), refreshLineage()]);
-    // The frame stays on the image it was drawn on, to crop again or change it; the new version is one tap away.
+    if (open) { await openViewer(image.id, { history: 'replace' }); toast(t('Crop saved as a new version.')); return true; }
+    // From Expandir the frame stays on the image it was drawn on, to crop again or change it; the new version is one tap away.
     toast(t('Crop saved as a new version.'), { action: { label: t('View'), run: () => openViewer(image.id, { history: 'replace' }) } });
     return true;
   } catch (err) { setError('#edit-error', err.message); return false; }
@@ -4116,7 +4363,19 @@ async function submitCrop() {
 // Upscale: the same picture recreated at a larger size, as a new version
 function startUpscale() {
   const item = viewer.item; if (!item) { viewer.action = null; setMode('view'); return; }
-  const sizes = upscaleSizes(item.width, item.height);
+  const flexible = modelEntries(m => m.flex);
+  const model = [state.prefs.upscale?.model, item.options?.model].find(id => flexible.some(([f]) => f === id)) || DEFAULT_OPTIONS.model;
+  fillSelect($('#upscale-model'), flexible, model);
+  syncModelFields($('#upscale-model'), $('#upscale-quality'), null, state.prefs.upscale?.quality || 'high');
+  renderUpscaleSizes();
+  setUpscaleWith(upscaleWithPref());
+  updateUpscaleCost();
+}
+/** The larger sizes the chosen model can bring the image to (a model on the GPU goes further than the image APIs). */
+function renderUpscaleSizes() {
+  const item = viewer.item; if (!item) return;
+  const limits = limitsOf($('#upscale-model').value);
+  const sizes = upscaleSizes(item.width, item.height, limits.gpu ? limits : null);
   const preferred = state.prefs.upscale?.scale;
   viewer.upscale = sizes.find(s => s.label === preferred) || sizes.find(s => s.label === '2×') || sizes.at(-1) || null;
   const list = $('#upscale-sizes');
@@ -4128,13 +4387,9 @@ function startUpscale() {
   }));
   const ratio = item.width / item.height;
   $('#upscale-current').textContent = sizes.length ? t('Current: {width} × {height}.', { width: item.width, height: item.height })
-    : ratio > 3 || ratio < 1 / 3 ? t('The API does not generate images with an aspect ratio above 3:1.') : t('This image is already at the largest size the API generates ({width} × {height}).', { width: item.width, height: item.height });
-  const flexible = modelEntries(m => m.flex);
-  const model = [state.prefs.upscale?.model, item.options?.model].find(id => flexible.some(([f]) => f === id)) || DEFAULT_OPTIONS.model;
-  fillSelect($('#upscale-model'), flexible, model);
-  syncModelFields($('#upscale-model'), $('#upscale-quality'), null, state.prefs.upscale?.quality || 'high');
-  setUpscaleWith(upscaleWithPref());
-  updateUpscaleCost();
+    : ratio > limits.ratio || ratio < 1 / limits.ratio ? (limits.gpu ? t('The model does not make images with an aspect ratio above 5:1.') : t('The API does not generate images with an aspect ratio above 3:1.'))
+    : t('This image is already at the largest size the API generates ({width} × {height}).', { width: item.width, height: item.height });
+  renderAction();
 }
 /**
  * What goes along with an upscale: nothing more, the Melhorar cleanup, or the Fotorrealista prompt. Remembered; the
@@ -4150,7 +4405,7 @@ function setUpscaleWith(value) {
   for (const b of $$('#upscale-with button')) b.setAttribute('aria-pressed', String(b.dataset.with === value));
 }
 for (const b of $$('#upscale-with button')) b.onclick = () => { setUpscaleWith(b.dataset.with); renderBox(); updateUpscaleCost(); };
-$('#upscale-model').onchange = () => { syncModelFields($('#upscale-model'), $('#upscale-quality'), null); updateUpscaleCost(); };
+$('#upscale-model').onchange = () => { syncModelFields($('#upscale-model'), $('#upscale-quality'), null); renderUpscaleSizes(); updateUpscaleCost(); };
 $('#upscale-quality').addEventListener('change', () => updateUpscaleCost());
 function updateUpscaleCost() {
   const item = viewer.item, size = viewer.upscale;
@@ -4183,7 +4438,7 @@ async function submitUpscale() {
   const model = $('#upscale-model').value, quality = $('#upscale-quality').value, extra = upscaleWith();
   savePrefs({ upscale: { model, quality, scale: size.label, with: extra } });
   // Same format and background as the source. Planning would rewrite the instruction, so it stays off.
-  const options = { ...DEFAULT_OPTIONS, ...(item.options || {}), format: item.options?.format || FORMAT_OF_MIME[item.mime] || 'png',
+  const options = { ...sourceOptions(item), format: item.options?.format || FORMAT_OF_MIME[item.mime] || 'png',
     model, quality, n: 1, size: `${size.width}x${size.height}`, thinking: 'off', previews: editPrefs().previews };
   $('#edit-submit').disabled = true;
   try {
@@ -4597,6 +4852,7 @@ function renderVideoPanel() {
     [t('File'), `${format} · ${megabytes(item.size || 0)}`]];
   if (!item.local) rows.push([t('Sent'), dateTime(item.created)]);
   $('#video-details').replaceChildren(...rows.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+  $('#video-from-part').hidden = !item.id || !!item.local;
   const rates = [...new Set([player.fps, ...(player.detected ? [player.detected] : []), ...COMMON_RATES.map(snapFps)])].sort((a, b) => a - b);
   fillSelect($('#video-fps'), rates.map(rate => [String(rate), `${fpsLabel(rate)}${rate === player.detected ? (player.fpsSource === 'manual' ? ' (detectado)' : '') : ''}`]), String(player.fps));
   $('#video-fps-hint').textContent = { file: t('Read from the file.'), measured: t('Measured in the browser.'), manual: t('Chosen by you. Go back to the detected value if frames skip or repeat.') }[player.fpsSource]
@@ -4710,6 +4966,13 @@ $('#frame-upscale').onclick = () => frameAction(t('Saving the frame…'), async 
   if (viewer.item?.id === image.id) setAction('upscale');
 });
 $('#frame-reference').onclick = () => frameAction(t('Saving the frame…'), async () => { addReference((await saveFrame()).image); });
+// A new video that starts on the frame on screen: the frame goes to the gallery first, as for an edit.
+$('#frame-animate').onclick = () => frameAction(t('Saving the frame…'), async () => {
+  const { image } = await saveFrame();
+  gpuUi.open({ keys: [{ at: 0, id: image.id, width: image.width, height: image.height }], album: viewer.item?.album || null });
+});
+// A new video from the one on screen: continue it, follow its movement or replace a part (gpu.js).
+$('#video-from').onclick = () => { const item = viewer.item; if (isVideo(item) && item.id) gpuUi.open({ source: { id: item.id, width: item.width, height: item.height, duration: player.duration || item.duration }, album: item.album || null }); };
 $('#frame-download').onclick = () => frameAction(t('Preparing the frame…'), async () => {
   const shot = await captureFrame(), url = URL.createObjectURL(shot.blob);
   const ext = { 'image/png': 'png', 'image/webp': 'webp', 'image/jpeg': 'jpg' }[shot.blob.type] || 'png';
@@ -4869,6 +5132,7 @@ function showSettingsPane(pane) {
   $('.settings-main').scrollTop = 0;
   if (pane === 'host') loadHostTest();
   if (pane === 'about') loadAbout();
+  if (pane === 'gpu') gpuUi.showPane();
 }
 $$('.settings-tab').forEach(tab => tab.onclick = () => { setError('#settings-error'); showSettingsPane(tab.dataset.pane); });
 $('#settings-open').onclick = () => showSettings();
@@ -5021,7 +5285,8 @@ function balanceStory(b, now) {
  */
 function payersInView() {
   const list = [];
-  if (!WRITING[state.section]) { if (state.models) list.push([imagePayer(composerOptions().model), t('the images of the chosen model')]); }
+  // A model on the account's GPU has no balance to show: its time is paid where the GPU is rented.
+  if (!WRITING[state.section]) { if (state.models && !isGpu($('#model').value)) list.push([imagePayer(composerOptions().model), t('the images of the chosen model')]); }
   else {
     const w = stories.writer, here = stories.story ? t('of this story') : t('of a new story');
     if (w) {
