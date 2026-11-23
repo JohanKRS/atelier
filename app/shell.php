@@ -437,10 +437,11 @@ from behind, looking at the sea') ?>"></textarea></label>
         </div>
       </div>
       <div class="brush-bar" id="brush-bar" hidden>
-        <span class="brush-hint"><?= e('Paint what should be redone') ?></span>
+        <span class="brush-hint" id="brush-hint"><?= e('Paint what should be redone') ?></span>
+        <button type="button" id="mask-cover" class="chip" aria-pressed="false" title="<?= e('Cover: the painted area goes erased, so the AI does not see what was there and draws it from scratch. Off, it sees the area and redoes it from what is there.') ?>"><span data-icon="eye-off"></span><span class="mask-cover-text"><?= e('Cover', ['ctx' => 'brush']) ?></span></button>
         <label class="brush-size"><span class="sr-only"><?= e('Brush size') ?></span><span data-icon="brush"></span><input type="range" id="brush-size" min="6" max="220" value="56"></label>
         <button type="button" id="mask-clear" class="chip"><?= e('Clear') ?></button>
-        <button type="button" id="mask-done" class="chip" title="<?= e('Keep the marked area and go write the request') ?>"><?= e('Done') ?></button>
+        <button type="button" id="mask-done" class="chip" title="<?= e('Keep the marked area and go write the request') ?>" aria-label="<?= e('Done') ?>"><span data-icon="check"></span><span class="mask-done-text"><?= e('Done') ?></span></button>
         <button type="button" id="mask-go" class="chip strong" title="<?= e('Generate a new version with only the painted area redone. The text in the box, if any, says what should appear in it. (Ctrl+Enter)') ?>"><?= e('Redo area') ?></button>
       </div>
     </section>
@@ -483,19 +484,20 @@ from behind, looking at the sea') ?>"></textarea></label>
           <label class="lines-box" id="edit-vary-lines-box" hidden><span><?= e('One line per image') ?></span><textarea id="edit-vary-lines" data-vary-lines rows="3" maxlength="10000" placeholder="<?= e('sitting on the beach
 running on the sand
 from behind, looking at the sea') ?>"></textarea></label>
-          <div class="tools" role="group" aria-label="<?= e('Edit tools') ?>">
+          <div class="tools edit-tools" role="group" aria-label="<?= e('Edit tools') ?>">
             <button type="button" id="brush-toggle" class="tool" aria-pressed="false" title="<?= e('Paint the area to redo: only it changes. Without text, that part is redone; with text, it becomes what you ask for. (B)') ?>"><span data-icon="brush"></span><span><?= e('Area') ?></span></button>
             <button type="button" id="edit-file-open" class="tool" title="<?= e('References from the computer (you can also drag or paste them)') ?>"><span data-icon="image-plus"></span><span><?= e('File') ?></span></button>
             <button type="button" id="edit-gallery-refs" class="tool" title="<?= e('Choose one or more images from the gallery as references') ?>"><span data-icon="gallery"></span><span><?= e('Gallery') ?></span></button>
             <button type="button" id="edit-vary-open" class="tool" aria-pressed="false" title="<?= e('Several different versions of this image from a single request (for example, poses or scenes): the app varies each one, or you write one line per image') ?>"><span data-icon="variations"></span><span><?= e('Variations') ?></span></button>
+            <button type="button" id="crop-open" class="tool" aria-pressed="false" aria-controls="action-panel" title="<?= e('Keep only a part of the image: pull the frame\'s handles or pick a proportion. Made on this device, at no cost; the cropped image opens as a new version, ready to edit or expand.') ?>"><span data-icon="crop"></span><span><?= e('Crop', ['ctx' => 'action']) ?></span></button>
+            <button type="button" id="expand-open" class="tool" aria-pressed="false" aria-controls="action-panel" title="<?= e('Enlarge the canvas beyond the edges of the image, on whichever side you want (pulling a side inward also cuts it off). The text in the box, if any, says what should appear in the new areas.') ?>"><span data-icon="expand"></span><span><?= e('Expand') ?></span></button>
             <button type="button" id="upscale-open" class="tool" aria-pressed="false" aria-controls="action-panel" title="<?= e('Recreate at a higher resolution. The text in the box, if any, says what to improve.') ?>"><span data-icon="upscale"></span><span><?= e('Upscale', ['ctx' => 'action']) ?></span></button>
-            <button type="button" id="expand-open" class="tool" aria-pressed="false" aria-controls="action-panel" title="<?= e('Crop the image and enlarge the canvas beyond its edges, on whichever side you want. The text in the box, if any, says what should appear in the new areas.') ?>"><span data-icon="expand"></span><span><?= e('Expand') ?></span></button>
             <button type="button" id="photoreal" class="tool" aria-pressed="false" aria-controls="action-panel" title="<?= e('The same image as a real photo, from a professional camera or a phone. Keeps the composition, the people, the anatomy and every detail; only the style changes. The text in the box, if any, goes along as a note and has priority.') ?>"><span data-icon="camera"></span><span><?= e('Photoreal') ?></span></button>
             <button type="button" id="enhance" class="tool" aria-pressed="false" aria-controls="action-panel" title="<?= e('Recreates the same image clean, without noise, specks, grain, artifacts or strange textures, with natural skin in the same tone and no oily shine, without changing the style, the people or the composition. The text in the box, if any, goes along as a note and has priority.') ?>"><span data-icon="sparkle"></span><span><?= e('Enhance') ?></span></button>
             <button type="button" id="clean" class="tool" aria-pressed="false" aria-controls="action-panel" title="<?= e('Removes specks and the web of fine lines from the image right on your device, without using the API and at no cost. Outlines, eyes, hair and details stay sharp. The result becomes a new version.') ?>"><span data-icon="eraser"></span><span><?= e('Clean') ?></span></button>
             <input id="edit-file" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
           </div>
-          <div id="mask-chip" class="mask-chip" hidden><span data-icon="brush"></span><span><?= e('Only the marked area') ?></span><button type="button" id="mask-remove" class="icon-btn tiny" data-icon="close" aria-label="<?= e('Remove the marked area') ?>"></button></div>
+          <div id="mask-chip" class="mask-chip" hidden><span data-icon="brush"></span><span id="mask-chip-text"><?= e('Only the marked area') ?></span><button type="button" id="mask-remove" class="icon-btn tiny" data-icon="close" aria-label="<?= e('Remove the marked area') ?>"></button></div>
           <div class="vary-box" id="edit-vary-box" hidden>
             <div class="vary-head">
               <span class="field-title" id="edit-vary-title"><?= e('Several images') ?></span>
@@ -553,6 +555,12 @@ from behind, looking at the sea') ?>"></textarea></label>
                 <button type="button" id="expand-fit" class="link-btn" title="<?= e('Make the frame the size of the image, to start a crop') ?>"><?= e('Frame on the image') ?></button>
                 <button type="button" id="expand-center" class="link-btn" title="<?= e('Put the image in the middle of the frame') ?>"><?= e('Center') ?></button>
               </div>
+              <fieldset class="field" id="expand-ratio-field" hidden>
+                <legend><?= e('Proportion') ?></legend>
+                <div id="expand-ratios" class="segmented small crop-ratios">
+                  <?php foreach (['1:1', '4:5', '3:4', '2:3', '9:16', '16:9', '4:3', '3:2'] as $ratio): ?><button type="button" data-crop="<?= $ratio ?>" aria-pressed="false"><?= $ratio ?></button><?php endforeach ?>
+                </div>
+              </fieldset>
               <p id="expand-dimensions" class="hint" aria-live="polite"></p>
               <div class="row2" id="expand-engine">
                 <label><?= e('Model') ?><select id="expand-model"></select></label>

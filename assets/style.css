@@ -220,6 +220,11 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .tool { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-width: 0; height: 46px; padding: 0 4px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--raised); color: var(--text-2); font-size: 11.5px; font-weight: 500; white-space: nowrap; transition: border-color .12s, color .12s, background .12s; }
 .tool svg.i { width: 16px; height: 16px; }
 .tool > span:last-child { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+/* The edit panel's grid in two groups: four smaller helpers of a plain edit on top (Área, Arquivo, Galeria, Variações),
+   then the requests in rows of three. */
+.edit-tools { grid-template-columns: repeat(12, minmax(0, 1fr)); }
+.edit-tools .tool { grid-column: span 4; }
+.edit-tools .tool:nth-child(-n+4) { grid-column: span 3; }
 .tool:hover:not(:disabled) { color: var(--text); background: var(--hover); border-color: var(--line-strong); }
 .tool[aria-pressed=true] { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
 .tool[aria-pressed=true] svg.i { color: var(--accent); }
@@ -248,6 +253,9 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .preset-before { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .expand-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; }
 .expand-line .link-btn { align-self: center; }
+.action-panel .crop-ratios { display: flex; align-self: stretch; }
+.crop-ratios button { flex: 1; justify-content: center; min-width: 0; padding-left: 0; padding-right: 0; font-variant-numeric: tabular-nums; }
+.crop-ratios button:disabled { opacity: .38; }
 .cost-note { margin: 0; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; cursor: help; }
 .size-options { display: grid; gap: 6px; }
 .size-option { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--bg); color: var(--text-2); font-variant-numeric: tabular-nums; text-align: left; transition: border-color .12s, color .12s, background .12s; }
@@ -713,6 +721,8 @@ body:has(#viewer[open][data-kind=video]) .toast { bottom: 104px; }
 .stage-frame.checker img { background-color: #2a2a30; background-image: linear-gradient(45deg, #222227 25%, transparent 25%), linear-gradient(-45deg, #222227 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #222227 75%), linear-gradient(-45deg, transparent 75%, #222227 75%); background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0; }
 .mask-canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .55; cursor: crosshair; border-radius: 4px; }
 .mask-canvas.idle { pointer-events: none; opacity: .35; }
+/* A covered area hides what is under it, as it goes to the AI. */
+.mask-canvas.cover, .mask-canvas.cover.idle { opacity: 1; }
 /* The brush's circle: the size and the place of the next stroke. Light with a dark edge, to show on any picture. */
 .brush-cursor { position: absolute; left: 0; top: 0; z-index: 1; box-sizing: border-box; border-radius: 50%; border: 1.5px solid #fff; background: rgba(143,166,255,.16); box-shadow: 0 0 0 1px rgba(0,0,0,.6), inset 0 0 0 1px rgba(0,0,0,.6); pointer-events: none; will-change: transform; }
 .stage-label { position: absolute; left: 12px; top: 12px; z-index: 1; padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,.7); color: #fff; font-size: 12px; font-weight: 600; }
@@ -912,6 +922,12 @@ select.compact-select { width: auto; min-height: 30px; padding: 4px 26px 4px 9px
 .stage.edge .brush-size { flex: 1; min-width: 0; }
 .stage.edge .brush-size input { flex: 1; width: auto; min-width: 44px; }
 .stage.edge .brush-bar .chip { padding-left: 10px; padding-right: 10px; }
+/* On a phone Cobrir and Concluir are their icons (a crossed eye, lit while on; a check), and the slider goes without its
+   brush, so it keeps room to be dragged. */
+.stage.edge :is(.mask-cover-text, .mask-done-text, .brush-size > [data-icon], .brush-size > svg) { display: none; }
+.stage.edge :is(#mask-cover, #mask-done) { padding-left: 8px; padding-right: 8px; }
+#mask-done > [data-icon] { display: none; }
+.stage.edge #mask-done > [data-icon] { display: inline-flex; }
 /* Upright tablet: under the picture, the edit panel on the left and the versions on the right. */
 @media (orientation: portrait) and (min-width: 700px) and (max-width: 1180px) {
   .viewer:not(.immersive) .viewer-shell { display: grid; grid-template-columns: minmax(0, 1fr) 264px; grid-template-rows: 52px auto auto; grid-template-areas: "bar bar" "stage stage" "inspector versions"; align-content: start; }
