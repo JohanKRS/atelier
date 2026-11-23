@@ -1867,7 +1867,8 @@ textarea.vn-gameplay-text { min-height: 320px; }
 .video-keys { align-items: flex-start; }
 .video-key { display: grid; justify-items: center; gap: 4px; }
 .video-sheet .video-key-at { display: inline-flex; flex-direction: row; align-items: center; gap: 5px; min-height: 28px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.video-sheet .video-key-at input { width: 64px; min-height: 28px; padding: 3px 6px; font-size: 12.5px; text-align: right; }
+.video-sheet .video-key-at input[type=number] { flex: none; width: 64px; min-height: 28px; padding: 3px 6px; font-size: 12.5px; text-align: right; }
+.video-sheet .video-key-at span { white-space: nowrap; }
 .video-frame.is-video img { filter: saturate(.9); }
 .video-frame-time { position: absolute; right: 6px; bottom: 6px; padding: 1px 6px; border-radius: 999px; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; font-variant-numeric: tabular-nums; }
 .video-sound { display: grid; align-content: start; gap: 6px; width: 180px; min-height: 112px; padding: 8px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); background: var(--panel); font-size: 12px; }
