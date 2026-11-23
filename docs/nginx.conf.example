@@ -1,7 +1,7 @@
 # Atelier on nginx with PHP-FPM.
 #
-# nginx ignores .htaccess, so the rules that file holds for Apache and LiteSpeed live here: only index.php, mcp.php and
-# the files in assets/ are served; app/, bin/, tests/, the configuration and every data file stay closed. Without these
+# nginx ignores .htaccess, so the rules that file holds for Apache and LiteSpeed live here: only index.php, mcp.php, gpu.php
+# and the files in assets/ are served; app/, bin/, tests/, the configuration and every data file stay closed. Without these
 # rules the app warns its administrator in Settings.
 #
 # The example assumes the app sits at the root of the site. In a subfolder, put the folder's name in front of each path
@@ -21,14 +21,14 @@ server {
     client_max_body_size 50m;
 
     # Internal folders and files: never served. These come first, so they win over the PHP rule below.
-    location ~ ^/(app|bin|tests|storage|docs|\.git|\.github)(/|$) { return 404; }
+    location ~ ^/(app|bin|colab|tests|storage|docs|\.git|\.github)(/|$) { return 404; }
     location ~ ^/(config(\.example)?\.php|data-dir\.php.*|README\.md|SECURITY\.md|PROJECT_STATUS\.md)$ { return 404; }
     location ~ \.(sqlite|enc|part|log|lock)$ { return 404; }
     location ~ /\.(?!well-known/) { return 404; }
 
-    # The two entry points. Generations wait for the image API for up to api_timeout (600 s by default), and both
-    # stream progress, so the answer is passed on as it is written.
-    location ~ ^/(index|mcp)\.php$ {
+    # The entry points: the app, the MCP server and the video worker's endpoint. Generations wait for the image API for
+    # up to api_timeout (600 s by default), and both stream progress, so the answer is passed on as it is written.
+    location ~ ^/(index|mcp|gpu)\.php$ {
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         fastcgi_param HTTPS on;

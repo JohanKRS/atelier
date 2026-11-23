@@ -3,8 +3,8 @@ import { t, language, locale, number } from './i18n.js';
 const assetVersion = new URL(import.meta.url).search;
 const [{ snap16, frameKind, keptArea, validateFrame, frameTooLarge, resizeFrame, panFrame, sizeFrame, centerFrame, frameView }, { versionNumbers, buildTree, branches, forkDepth, validSize, editSize, aspectOf, upscaleSizes },
   { estimate, usageCost, formatUsd, PRICING_CHECKED, GEMINI_PRICING_CHECKED, isGemini, setAliases, UNKNOWN_IMAGE, balanceNow, formatBalance, planningCost, planningAverage, learnedScale }, { mp4Timing, snapFps, fpsLabel, frameAt, frameTime, frameCount, timecode, megabytes, COMMON_RATES },
-  { justify, firstRowAt, monthMarks, railMarks }, { strips }, storyHelpers, { createStories }, readerModule, { createComics, zip }, packModule, { createVn }] =
-  await Promise.all(['outpaint', 'lineage', 'pricing', 'video', 'library', 'clean', 'story', 'stories', 'reader', 'comics', 'pack', 'vn'].map(name => import(`./${name}.js${assetVersion}`)));
+  { justify, firstRowAt, monthMarks, railMarks }, { strips }, storyHelpers, { createStories }, readerModule, { createComics, zip }, packModule, { createVn }, { createGpu, aspectRatio }] =
+  await Promise.all(['outpaint', 'lineage', 'pricing', 'video', 'library', 'clean', 'story', 'stories', 'reader', 'comics', 'pack', 'vn', 'gpu'].map(name => import(`./${name}.js${assetVersion}`)));
 
 // ---------------------------------------------------------------------------
 // DOM helpers and icons
@@ -78,6 +78,7 @@ const ICONS = {
   feather: '<path d="M19.5 4.5c-6 0-11 4.5-11 11v4"/><path d="M8.5 15.5h5.5c3.2 0 5.5-4.6 5.5-11"/><path d="M4.5 19.5l4-4"/>',
   send: '<path d="M4.5 12 19.5 4.5 15 19.5l-3.2-6.3z"/><path d="m11.8 13.2 7.7-8.7"/>',
   stop: '<rect x="6.5" y="6.5" width="11" height="11" rx="2"/>',
+  music: '<path d="M9 17.5V6l10-2v11.5"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/>',
   eye: '<path d="M2.8 12s3.4-6.5 9.2-6.5 9.2 6.5 9.2 6.5-3.4 6.5-9.2 6.5S2.8 12 2.8 12z"/><circle cx="12" cy="12" r="2.8"/>',
   dialogue: '<path d="M4.5 6.5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-6l-4.5 3.5v-3.5h-.5a2 2 0 0 1-2-2z"/><path d="M8.5 9h7M8.5 12.2h4.5"/>',
   key: '<circle cx="8" cy="15.5" r="3.75"/><path d="M10.7 12.8 19.5 4M15.8 7.7l2.6 2.6M13.6 9.9l2 2"/>',
@@ -273,6 +274,13 @@ function confirmAction({ title, message, confirm, danger = false }) {
 
 $$('[data-close]').forEach(b => b.addEventListener('click', () => document.getElementById(b.dataset.close).close()));
 
+// Videos on the GPU worker (gpu.js): the window that asks for one, the GPU's state and the video requests in the feed.
+const gpuUi = createGpu({ api, h, icon, toast, confirmAction, trackJob: job => { trackJob(job); schedulePoll(1500); }, newId, $, $$, dateTime, imageUrl, showSettings: pane => showSettings(pane),
+  pickImages: (list, max, done, title) => openPicker({ textarea: '#video-prompt', list: () => list, offset: 0, max, base: () => null, render: done, title, mentions: false }),
+  pickVideos: (list, max, done, title) => openPicker({ textarea: '#video-prompt', list: () => list, offset: 0, max, base: () => null, render: done, title, mentions: false, kind: 'video' }),
+  keys: () => ({ claude: !!state.has_claude_key, openai: !!state.has_key, gemini: !!state.has_gemini_key }), formatUsd,
+  activeJobs: () => [...state.jobs.values()].filter(j => ACTIVE.has(j.status)), prefs: () => state.prefs, savePrefs, changed: () => scheduleRender() });
+
 // Stories (stories.js): the writer's section, with what it shares of this page.
 const stories = createStories({ api, h, icon, toast, confirmAction, imageUrl, openViewer, trackJob, launchQueued, formatUsd, dateTime, plural, newId, story: storyHelpers, reader: readerModule, createComics, createVn, $,
   openHistory: story => openHistory({ story }),
@@ -370,6 +378,7 @@ async function enter() {
   viewer.versionsView = state.prefs.versions === 'time' ? 'time' : 'tree';
   applyColumns();
   await Promise.all([loadGallery(), loadFeedJobs(), refreshBalance()]);
+  gpuUi.refresh().then(() => gpuUi.schedule());
   if (state.user?.admin) checkExposure();
   if (!state.has_key) showSettings();
   // Fresh lists from the APIs when the kept ones are old, without holding the page.
@@ -881,6 +890,9 @@ async function addRefFiles(target, files) {
 const addComposerRefs = files => addRefFiles(REF_TARGETS.composer, files);
 acceptDrops($('#drop-area'), addComposerRefs); acceptPaste($('#prompt'), addComposerRefs);
 $('#gallery-refs').onclick = () => openPicker(REF_TARGETS.composer);
+// A video from the composer: its prompt, and its references as the first frame or the people and things to keep.
+// The composer's references go as the video's references.
+$('#video-open').onclick = () => gpuUi.open({ prompt: $('#prompt').value, pictures: state.refs.slice(0, 9).map(r => r.id ? { id: r.id, width: r.width, height: r.height } : { data: r.data, src: r.data, width: r.width, height: r.height }).filter(f => f.id || f.data) });
 
 // ---------------------------------------------------------------------------
 // Mentions: @1, @2… in a prompt. Typing @ opens a menu of the references; removing one renumbers the others.
@@ -1037,7 +1049,7 @@ const pickerTiles = new Map();
 function openPicker(target, { mention = null } = {}) {
   if (!state.unlocked || pickerDialog.open) return;
   const ids = target.list().filter(r => r.id);
-  Object.assign(picker, { target, mention, selected: [...new Set(ids.map(r => r.id))], known: new Map(ids.map(r => [r.id, r])), items: [], filter: 'all', search: '', group: state.gallery.group, hasMore: false });
+  Object.assign(picker, { target, mention, selected: [...new Set(ids.map(r => r.id))], known: new Map(ids.map(r => [r.id, r])), items: [], filter: 'all', search: '', group: state.gallery.group && target.kind !== 'video', hasMore: false });
   $('#picker-search').value = ''; $('#picker-group').checked = picker.group;
   $$('[data-picker-filter]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.pickerFilter === 'all')));
   $('#picker-title').textContent = target.title || (target.offset ? t('References for the edit') : t('References from the gallery'));
@@ -1050,7 +1062,7 @@ async function loadPicker({ more = false } = {}) {
   const version = ++picker.version;
   picker.loading = true; $('#picker-loading').hidden = false;
   try {
-    const data = await api('gallery', undefined, { q: picker.search, favorite: picker.filter === 'favorites' ? '1' : '0', trash: '0', kind: 'image',
+    const data = await api('gallery', undefined, { q: picker.search, favorite: picker.filter === 'favorites' ? '1' : '0', trash: '0', kind: picker.target.kind || 'image',
       offset: String(more ? picker.items.length : 0), limit: '60', group: picker.group ? '1' : '0' });
     if (version !== picker.version || !pickerDialog.open) return;
     picker.items = more ? [...picker.items, ...data.items] : data.items; picker.hasMore = data.has_more;
@@ -1071,12 +1083,13 @@ function pickerTile(item) {
   if (!tile) {
     const img = h('img', { alt: '', loading: 'lazy', decoding: 'async', draggable: 'false' }); img.src = imageUrl(item.id, true);
     tile = h('button', { type: 'button', class: 'pick', 'data-id': item.id, 'aria-pressed': 'false', onclick: () => togglePick(item.id) },
-      img, h('span', { class: 'tile-caption', 'aria-hidden': 'true' }), h('span', { class: 'pick-mark', 'aria-hidden': 'true' }));
+      img, h('span', { class: 'tile-caption', 'aria-hidden': 'true' }), h('span', { class: 'pick-mark', 'aria-hidden': 'true' }),
+      isVideo(item) ? h('span', { class: 'pick-duration', 'aria-hidden': 'true' }, icon('play'), clock(Math.round(item.duration || 0))) : '');
     pickerTiles.set(item.id, tile);
   }
   tile.style.setProperty('--ar', (item.width / item.height).toFixed(4));
   const text = displayText(item);
-  tile.dataset.label = snippet(text, 60) || t('Image');
+  tile.dataset.label = snippet(text, 60) || (isVideo(item) ? t('Video') : t('Image'));
   $('.tile-caption', tile).textContent = snippet(text, 140);
   return tile;
 }
@@ -1086,7 +1099,8 @@ function renderPicker() {
   $('#picker-empty').hidden = !empty;
   if (empty) {
     const [title, detail] = picker.search ? [t('Nothing found'), t('No prompt contains “{search}”.', { search: snippet(picker.search, 40) })]
-      : picker.filter === 'favorites' ? [t('No favorites'), ''] : [t('The gallery is empty'), t('Generate or import images to use them as references.')];
+      : picker.filter === 'favorites' ? [t('No favorites'), ''] : picker.target.kind === 'video' ? [t('No videos yet'), t('Import or drag in a video (MP4, MOV or WebM), or make one.')]
+      : [t('The gallery is empty'), t('Generate or import images to use them as references.')];
     $('#picker-empty').replaceChildren(icon('image'), h('strong', {}, title), detail ? h('span', {}, detail) : '');
   }
   updatePicker();
@@ -1097,7 +1111,7 @@ function pickerResult() {
   const kept = picker.target.list().filter(r => { if (!r.id) return true; if (!chosen.has(r.id) || seen.has(r.id)) return false; seen.add(r.id); return true; });
   const added = picker.selected.filter(id => !seen.has(id)).map(id => {
     const item = picker.known.get(id) || {};
-    return { id, name: snippet(displayText(item), 60) || t('Image from the gallery'), width: item.width, height: item.height };
+    return { id, name: snippet(displayText(item), 60) || (isVideo(item) ? t('Video') : t('Image from the gallery')), width: item.width, height: item.height, ...(isVideo(item) ? { duration: item.duration || 0 } : {}) };
   });
   return { list: [...kept, ...added], added };
 }
@@ -1119,6 +1133,11 @@ function updatePicker() {
     tile.setAttribute('aria-label', state_ ? `${tile.dataset.label} (${state_})` : tile.dataset.label);
   }
   const count = picker.selected.length, cited = picker.selected.map(id => numbers.get(id)).sort((a, b) => a - b).map(n => `@${n}`);
+  if (target.kind === 'video') {
+    $('#picker-status').textContent = !count ? t('Select one or more videos (up to {max}).', { max: pickerRoom() }) : plural(count, t('{n} video selected.'), t('{n} videos selected.'));
+    $('#picker-done').textContent = count ? plural(count, t('Use {n} video'), t('Use {n} videos')) : t('Done');
+    return;
+  }
   $('#picker-status').textContent = !count ? t('Select one or more images (up to {max}).', { max: pickerRoom() })
     : target.mentions === false ? plural(count, t('{n} image selected.'), t('{n} images selected.'))
     : plural(count, t('{n} image selected. In the prompt: {cited}.', { cited: listText(cited) }), t('{n} images selected. In the prompt: {cited}.', { cited: listText(cited) }));
@@ -1127,7 +1146,7 @@ function updatePicker() {
 function togglePick(id) {
   const index = picker.selected.indexOf(id);
   if (index >= 0) picker.selected.splice(index, 1);
-  else if (picker.selected.length >= pickerRoom()) { toast(picker.target.mentions === false ? t('Up to {max} images.', { max: picker.target.max }) : picker.target.offset ? t('Use up to {max} references besides the edited image.', { max: picker.target.max }) : t('Use up to {max} references.', { max: picker.target.max })); return; }
+  else if (picker.selected.length >= pickerRoom()) { toast(picker.target.kind === 'video' ? t('Up to {max} videos.', { max: picker.target.max }) : picker.target.mentions === false ? t('Up to {max} images.', { max: picker.target.max }) : picker.target.offset ? t('Use up to {max} references besides the edited image.', { max: picker.target.max }) : t('Use up to {max} references.', { max: picker.target.max })); return; }
   else picker.selected.push(id);
   updatePicker();
 }
@@ -1241,7 +1260,8 @@ function launch(id) {
     .finally(() => { state.launching.delete(id); schedulePoll(300); });
 }
 function launchQueued() {
-  const jobs = [...state.jobs.values()];
+  // Video requests wait for the GPU worker, which takes them from the server itself.
+  const jobs = [...state.jobs.values()].filter(j => !j.runner);
   const busy = jobs.filter(j => j.status === 'running' || j.status === 'cancelling' || (j.status === 'queued' && state.launching.has(j.id))).length;
   let free = state.maxParallel - busy;
   for (const job of jobs.filter(j => j.status === 'queued' && !state.launching.has(j.id) && !j.launchError).sort((a, b) => a.created - b.created)) {
@@ -1380,8 +1400,24 @@ function countLeaving() {
   }
   watchFailures();
 }
+/**
+ * A video request in the window again: its prompt, options and what it came from in the library. Pictures from the
+ * device and sounds stay with the request, so they are not copied.
+ */
+function reuseVideo(job) {
+  const size = id => ({ id, width: itemById(id)?.width, height: itemById(id)?.height, duration: itemById(id)?.duration });
+  const inputs = job.inputs || [], o = job.options || {};
+  const source = inputs.find(i => i.kind === 'video' && i.role === 'source');
+  gpuUi.open({ prompt: job.prompt, options: o, op: o.op || null,
+    pictures: inputs.filter(i => i.kind === 'image' && i.role === 'ref' && i.id).map(i => size(i.id)),
+    keys: inputs.filter(i => i.kind === 'image' && i.role === 'key' && i.id).map(i => ({ ...size(i.id), at: i.at })),
+    videos: inputs.filter(i => i.kind === 'video' && i.role === 'ref').map(i => ({ ...size(i.id), duration: i.duration })),
+    source: source ? { ...size(source.id), duration: source.duration } : null });
+  if (inputs.some(i => i.kind === 'audio' || (i.kind === 'image' && !i.id))) toast(t('Prompt and options copied. The sounds and the pictures from the device were not copied.'));
+}
 function useJobPrompt(job) {
   closeViewer();
+  if (job.kind === 'video') { reuseVideo(job); return; }
   if (state.section !== 'images') setSection('images');
   applyOptions(job.options); persistComposer();
   $('#prompt').value = job.prompt; autoGrow($('#prompt')); updateGenerateLabel();
@@ -1391,6 +1427,7 @@ function useJobPrompt(job) {
 
 function phaseText(job) {
   if (job.launchError) return t('Did not start');
+  if (job.kind === 'video') return gpuUi.phase(job);
   if (job.status === 'queued') {
     const ahead = [...state.jobs.values()].filter(j => j.status === 'queued' && j.created < job.created).length;
     return ahead ? t('Queued · #{n}', { n: ahead + 1 }) : t('Queued');
@@ -1785,12 +1822,23 @@ function parentAspect(job) {
   const parent = job.parent_id && (itemById(job.parent_id) || viewer.lineage?.nodes.find(n => n.id === job.parent_id));
   return parent ? parent.width / parent.height : 1;
 }
+/** The shape a request's tile takes: the image size it asks for, or a video's aspect (its first frame's when it has one). */
+function jobAspect(job) {
+  if (job.kind === 'video') {
+    // The shape of the video it comes from, else of its earliest pinned picture (as the worker takes it), else the one asked.
+    const inputs = job.inputs || [], at = i => i.at === 'end' ? Infinity : Number(i.at || 0);
+    const from = inputs.find(i => i.role === 'source') || inputs.filter(i => i.kind === 'image' && i.role === 'key').sort((a, b) => at(a) - at(b))[0];
+    const shape = from?.id ? itemById(from.id) : null;
+    return shape?.width && shape?.height ? shape.width / shape.height : aspectRatio(job.options?.aspect);
+  }
+  return aspectOf(job.options?.size, parentAspect(job));
+}
 function jobTiles(job) {
   // A finished request keeps its place until the gallery shows its images, so the feed never empties in between.
   if (job.status === 'completed' && (!job.image_ids?.length || job.image_ids.some(id => state.gallery.ids.has(id)))) return [];
   // A request that failed or could not start is one card, however many images it asked for.
   const count = (!ACTIVE.has(job.status) && job.status !== 'completed') || job.launchError ? 1 : Math.min(job.options?.n || 1, 10);
-  const aspect = Math.min(3, Math.max(1 / 3, aspectOf(job.options?.size, parentAspect(job))));
+  const aspect = Math.min(3, Math.max(1 / 3, jobAspect(job)));
   const tiles = [];
   for (let k = 0; k < count; k++) {
     const key = `job:${job.id}:${k}`;
@@ -1815,7 +1863,7 @@ function renderJobTile(tile, job, index) {
   for (const name of ['failed', 'uncertain', 'stuck']) tile.classList.toggle(name, state_ === name);
   // Event handlers read the latest copy: polling replaces the job object.
   const latest = () => state.jobs.get(job.id) || job;
-  const structure = JSON.stringify(problem ? [state_, job.error, job.launchError] : ['active', index, job.parent_id, job.operation, job.label, job.prompt]);
+  const structure = JSON.stringify(problem ? [state_, job.error, job.launchError, job.kind] : ['active', index, job.parent_id, job.operation, job.label, job.prompt, job.kind]);
   if (tile.dataset.structure !== structure) {
     tile.dataset.structure = structure;
     tile.opener.setAttribute('aria-label', t('View request details: {request}', { request: snippet(job.label || job.prompt, 60) }));
@@ -1836,7 +1884,8 @@ function renderJobTile(tile, job, index) {
       const cancel = h('button', { type: 'button', class: 'icon-btn small', 'aria-label': t('Cancel request'), onclick: () => cancelJob(latest()) }, icon('close'));
       const status = h('div', { class: 'job-status' }, h('span', { class: 'spinner small' }), h('span', { class: 'phase' }),
         h('span', { class: 'job-time', 'data-elapsed': job.id }, clock(now() - job.created)), cancel);
-      const kind = job.parent_id ? h('span', { class: 'job-kind' }, thumbOf(job.parent_id, 'parent'), OPERATION[job.operation] || t('Edit')) : '';
+      const kind = job.kind === 'video' ? h('span', { class: 'job-kind' }, job.parent_ids?.length ? thumbOf(job.parent_ids[0], 'parent') : icon('video'), t('Video'))
+        : job.parent_id ? h('span', { class: 'job-kind' }, thumbOf(job.parent_id, 'parent'), OPERATION[job.operation] || t('Edit')) : '';
       const footer = h('div', { class: 'job-footer' }, index === 0 ? h('p', { class: 'job-signal', 'data-signal': job.id, hidden: true }) : '', kind, h('p', { class: 'job-prompt', title: job.prompt }, snippet(job.label || job.prompt, 160)));
       body.append(status, footer);
       tile.replaceChildren(...$$(':scope > img.preview', tile), tile.opener, body);
@@ -1863,7 +1912,7 @@ function selectingIn(el) { const s = getSelection(); return !!s && !s.isCollapse
 // Request details: prompt, options and progress of a request, open while it runs (with or without previews)
 // ---------------------------------------------------------------------------
 const jobDialog = $('#job-dialog');
-const JOB_TITLE = { generate: t('New image'), edit: t('Edit'), expand: t('Expansion'), upscale: t('Upscale') };
+const JOB_TITLE = { generate: t('New image'), edit: t('Edit'), expand: t('Expansion'), upscale: t('Upscale'), video: t('Video') };
 const JOB_ENDED = { completed: t('Ready', { ctx: 'image' }), failed: t('Failed'), uncertain: t('Interrupted'), cancelled: t('Cancelled') };
 /** `copy` opens the details of a request that may have left the screen already. */
 function openJobDetails(id, copy = null) {
@@ -1871,6 +1920,14 @@ function openJobDetails(id, copy = null) {
   jobView.job = job;
   renderJobDetails();
   if (!jobDialog.open) jobDialog.showModal();
+}
+/** What a video request asked for (gpu.js), then its seed, the GPU that made it and when it was asked. */
+function videoRows(job) {
+  const o = job.options || {}, made = job.made || {}, rows = gpuUi.rows(job);
+  if (made.seed !== undefined || o.seed !== null && o.seed !== undefined) rows.push([t('Seed'), String(made.seed ?? o.seed)]);
+  if (made.gpu) rows.push([t('GPU'), made.seconds ? t('{gpu}, in {time}', { gpu: made.gpu, time: clock(made.seconds) }) : made.gpu]);
+  rows.push([t('Request'), dateTime(job.created)]);
+  return rows;
 }
 /** Rebuilds a part only when what it shows changed, so text being selected or copied is never replaced. */
 function rebuild(el, key, build) {
@@ -1882,7 +1939,7 @@ function renderJobDetails() {
   if (!jobView.job) return;
   const job = state.jobs.get(jobView.job.id) || jobView.job; jobView.job = job;
   const latest = () => state.jobs.get(job.id) || jobView.job;
-  const op = JOB_TITLE[job.operation] ? job.operation : 'generate';
+  const op = job.kind === 'video' ? 'video' : JOB_TITLE[job.operation] ? job.operation : 'generate';
   const o = job.options || {};
   const active = ACTIVE.has(job.status) && !job.launchError;
   const problem = !!job.launchError || ['failed', 'uncertain'].includes(job.status);
@@ -1915,8 +1972,11 @@ function renderJobDetails() {
 
   // The picture: the result, else the latest preview, else the image being changed, dimmed.
   const visual = $('#job-visual');
-  visual.style.setProperty('--ar', Math.min(3, Math.max(1 / 3, aspectOf(o.size, parentAspect(job)))).toFixed(4));
-  const src = done ? imageUrl(job.image_ids[0], true) : job.previews ? previewUrl(job.id, job.previews) : job.parent_id ? imageUrl(job.parent_id, true) : null;
+  visual.style.setProperty('--ar', Math.min(3, Math.max(1 / 3, jobAspect(job))).toFixed(4));
+  // A video shows, until it is made, the picture it starts on or the video it comes from.
+  const videoStart = op === 'video' ? (job.inputs || []).find(i => i.id && (i.role === 'source' || i.kind === 'image' && i.role === 'key' && i.at === 0)) : null;
+  const firstFrame = videoStart?.id || null;
+  const src = done ? imageUrl(job.image_ids[0], true) : job.previews ? previewUrl(job.id, job.previews) : job.parent_id ? imageUrl(job.parent_id, true) : firstFrame ? imageUrl(firstFrame, true) : null;
   if (src) setPreview(visual, src);
   else if (visual.dataset.preview) { delete visual.dataset.preview; $$('img.preview', visual).forEach(i => i.remove()); }
   const source = !!src && !done && !job.previews;
@@ -1924,15 +1984,18 @@ function renderJobDetails() {
   visual.classList.toggle('busy', active);
   $('.spinner', visual).hidden = !active || !!job.previews;
   const label = $('#job-visual-label');
-  label.hidden = !source; setText(label, op === 'edit' ? t('Edited image') : t('Source image'));
+  label.hidden = !source; setText(label, op === 'edit' ? t('Edited image') : op === 'video' ? (videoStart?.role === 'source' ? t('Original video') : t('First frame')) : t('Source image'));
 
   // Gallery images used as references (the image being changed is the picture above).
-  const refs = fixed ? [] : (job.parent_ids || []).filter(id => id !== job.parent_id);
+  const refs = fixed ? [] : (job.parent_ids || []).filter(id => id !== job.parent_id && id !== firstFrame);
   $('#job-refs').hidden = !refs.length;
   rebuild($('#job-refs'), refs, () => refs.map(id => thumbOf(id, 'job')));
 
   const model = state.models[o.model];
   const extra = Math.max(0, (job.reference_count || 0) - (job.parent_id ? 1 : 0));
+  if (op === 'video') {
+    rebuild($('#job-details'), [o, job.made, job.created], () => videoRows(job).flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+  } else {
   const rows = [[t('Model'), model?.label || o.model || ''], [t('Quality'), [...QUALITY, ...QUALITY_EXTENDED].find(([v]) => v === o.quality)?.[1] || o.quality || '']];
   if (model?.complexity && o.complexity) rows.push([t('Complexity'), COMPLEXITY.find(([v]) => v === o.complexity)?.[1] || o.complexity]);
   rows.push([t('Size'), o.size === 'auto' || !o.size ? t('Automatic', { ctx: 'size' }) : String(o.size).replace('x', ' × ')]);
@@ -1945,9 +2008,10 @@ function renderJobDetails() {
   if (job.cleaned) rows.push([t('Before sending'), cleanedNote(job.cleaned)]);
   rows.push([t('Request'), dateTime(job.created)]);
   rebuild($('#job-details'), rows, () => rows.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+  }
 
   const actions = [];
-  if (done) actions.push(['view', 'btn primary small', 'image', t('View image'), () => { jobDialog.close(); openViewer(job.image_ids[0], { history: viewerDialog.open ? 'replace' : 'push' }); }]);
+  if (done) actions.push(['view', 'btn primary small', op === 'video' ? 'video' : 'image', op === 'video' ? t('View video') : t('View image'), () => { jobDialog.close(); openViewer(job.image_ids[0], { history: viewerDialog.open ? 'replace' : 'push' }); }]);
   if (!fixed && op === 'edit' && job.parent_id) actions.push(['edit', 'btn secondary small', 'pencil', t('Use in the edit'), () => useInEdit(latest())]);
   else if (!fixed) actions.push(['reuse', 'btn secondary small', 'compose', t('Use prompt'), () => { const current = latest(); jobDialog.close(); useJobPrompt(current); }]);
   if (job.launchError) actions.push(['launch', 'btn secondary small', 'redo', t('Try to start'), () => launch(job.id)]);
@@ -3395,6 +3459,7 @@ function addReference(item) {
   toast(existing < 0 ? t('Added to the references as @{n}.', { n: state.refs.length }) : t('Already in the references as @{n}.', { n: existing + 1 }));
 }
 $('#as-reference').onclick = () => { if (viewer.item) addReference(viewer.item); };
+$('#animate-open').onclick = () => { const item = viewer.item; if (item) gpuUi.open({ prompt: $('#edit-prompt').value, keys: [{ at: 0, id: item.id, width: item.width, height: item.height }] }); };
 $('#open-video').onclick = () => { const source = viewer.item?.source; if (source?.video_id) openViewer(source.video_id, { history: 'replace', at: source.time }); };
 
 // Edit panel. One box of text and one button serve every request about the image: a plain edit, or one of the
@@ -4597,6 +4662,7 @@ function renderVideoPanel() {
     [t('File'), `${format} · ${megabytes(item.size || 0)}`]];
   if (!item.local) rows.push([t('Sent'), dateTime(item.created)]);
   $('#video-details').replaceChildren(...rows.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+  $('#video-from-part').hidden = !item.id || !!item.local;
   const rates = [...new Set([player.fps, ...(player.detected ? [player.detected] : []), ...COMMON_RATES.map(snapFps)])].sort((a, b) => a - b);
   fillSelect($('#video-fps'), rates.map(rate => [String(rate), `${fpsLabel(rate)}${rate === player.detected ? (player.fpsSource === 'manual' ? ' (detectado)' : '') : ''}`]), String(player.fps));
   $('#video-fps-hint').textContent = { file: t('Read from the file.'), measured: t('Measured in the browser.'), manual: t('Chosen by you. Go back to the detected value if frames skip or repeat.') }[player.fpsSource]
@@ -4710,6 +4776,13 @@ $('#frame-upscale').onclick = () => frameAction(t('Saving the frame…'), async 
   if (viewer.item?.id === image.id) setAction('upscale');
 });
 $('#frame-reference').onclick = () => frameAction(t('Saving the frame…'), async () => { addReference((await saveFrame()).image); });
+// A new video that starts on the frame on screen: the frame goes to the gallery first, as for an edit.
+$('#frame-animate').onclick = () => frameAction(t('Saving the frame…'), async () => {
+  const { image } = await saveFrame();
+  gpuUi.open({ keys: [{ at: 0, id: image.id, width: image.width, height: image.height }], album: viewer.item?.album || null });
+});
+// A new video from the one on screen: continue it, follow its movement or replace a part (gpu.js).
+$('#video-from').onclick = () => { const item = viewer.item; if (isVideo(item) && item.id) gpuUi.open({ source: { id: item.id, width: item.width, height: item.height, duration: player.duration || item.duration }, album: item.album || null }); };
 $('#frame-download').onclick = () => frameAction(t('Preparing the frame…'), async () => {
   const shot = await captureFrame(), url = URL.createObjectURL(shot.blob);
   const ext = { 'image/png': 'png', 'image/webp': 'webp', 'image/jpeg': 'jpg' }[shot.blob.type] || 'png';
@@ -4869,6 +4942,7 @@ function showSettingsPane(pane) {
   $('.settings-main').scrollTop = 0;
   if (pane === 'host') loadHostTest();
   if (pane === 'about') loadAbout();
+  if (pane === 'gpu') gpuUi.showPane();
 }
 $$('.settings-tab').forEach(tab => tab.onclick = () => { setError('#settings-error'); showSettingsPane(tab.dataset.pane); });
 $('#settings-open').onclick = () => showSettings();

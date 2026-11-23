@@ -78,7 +78,7 @@ for (const [width, height] of [[1366, 680], [820, 1180], [1440, 900]]) {
   await page.setViewportSize({ width, height });
   assert.equal(await composerFits(), true, `the whole form is in view at ${width} × ${height}`);
 }
-assert.deepEqual((await page.locator('.composer .tools .tool').allTextContents()).map(t => t.trim()), ['Arquivo', 'Galeria', 'Variações']);
+assert.deepEqual((await page.locator('.composer .tools .tool').allTextContents()).map(t => t.trim()), ['Arquivo', 'Galeria', 'Variações', 'Vídeo']);
 assert.equal(await page.locator('#drop-area button').count(), 0, 'no button inside the prompt box');
 
 // Simple mode: one quality level sets image quality, complexity and prompt planning together.
@@ -487,7 +487,7 @@ await page.waitForFunction(() => location.hash === '');
 // Configurações: the sections in groups on the left, one at a time, the keys first. The three keys are the same card
 // with the same three buttons, whatever the provider: Remover and Testar need a saved key, Salvar a typed one.
 await page.locator('#settings-open').click();
-assert.deepEqual(await page.locator('.settings-tab:not([hidden])').allTextContents(), ['Chaves de API', 'Saldos', 'Nome e senha', 'Acesso MCP', 'Sobre mim como leitor', 'Idioma', 'Usuários', 'Teste da hospedagem', 'Privacidade']);
+assert.deepEqual(await page.locator('.settings-tab:not([hidden])').allTextContents(), ['Chaves de API', 'Saldos', 'Nome e senha', 'Acesso MCP', 'Vídeo (GPU)', 'Sobre mim como leitor', 'Idioma', 'Usuários', 'Teste da hospedagem', 'Privacidade']);
 assert.deepEqual(await page.locator('.settings-pane').evaluateAll(panes => panes.filter(p => !p.hidden).map(p => p.id)), ['settings-keys']);
 assert.deepEqual(await page.locator('#settings-keys .key-card').evaluateAll(cards => cards.map(card => [card.querySelector('h4').textContent, ...[...card.querySelectorAll('.key-actions button')].map(b => b.textContent)])),
   [['OpenAI', 'Remover', 'Testar', 'Salvar'], ['Claude', 'Remover', 'Testar', 'Salvar'], ['Gemini', 'Remover', 'Testar', 'Salvar']]);

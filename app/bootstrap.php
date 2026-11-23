@@ -18,6 +18,8 @@ require_once __DIR__.'/GeminiImages.php';
 require_once __DIR__.'/Catalog.php';
 require_once __DIR__.'/Presets.php';
 require_once __DIR__.'/Jobs.php';
+require_once __DIR__.'/Gpu.php';
+require_once __DIR__.'/VideoPrompt.php';
 require_once __DIR__.'/Mcp.php';
 require_once __DIR__.'/Stream.php';
 require_once __DIR__.'/Claude.php';

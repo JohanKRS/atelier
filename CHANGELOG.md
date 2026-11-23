@@ -4,6 +4,23 @@ What changed in each version of Atelier. Versions follow [Semantic Versioning](h
 
 To update an install, replace the app files with the ones from the new zip and keep `config.php`, `data-dir.php` (if present) and the data folder.
 
+## [1.2.0] - 2026-11-23
+
+### Videos
+
+- Videos with sound made with open models on a GPU you rent by the hour, such as Google Colab. A notebook there (`colab/atelier_video.ipynb`) takes the account's video requests from the new `gpu.php`, makes them with ComfyUI inside the runtime and sends them to the library. Every call is short and goes from the GPU to your site, so no tunnel or open port is needed and host limits such as LiteSpeed's 120 seconds don't get in the way.
+- The model is MiniMax H3: 5 to 15 seconds with voices, effects and music, at 480p or 768p. Three qualities follow ComfyUI's official templates: Fast (Pika H3 Flex), Balanced (Turbo) and Maximum.
+- **New video**: from the prompt, with pictures pinned at moments of it (the first frame, the last one, and any second in between) and references: up to 9 pictures of people, places and things, up to 3 videos of the library whose movement, camera or style it follows, and up to 3 sounds (MP3, WAV, OGG, M4A, AAC or FLAC, up to 5 MB) with the voices to use or to play from a chosen second. In the prompt they are `@1` (pictures), `@v1` (videos) and `@s1` (sounds).
+- **From a video** of the library: continue it (joined to the original or apart), redo it following the movement of its people (pose), its shapes and camera (depth) or its outlines, or replace a part of it that you name (found in every frame by SAM 3), keeping its sound if you want. Each of these downloads its extra model (2 to 4 GB) the first time in a session.
+- **Improve the prompt**: Claude, GPT or Gemini (whichever has a key in Settings) rewrites your idea in the structure H3 was trained on: the alignment of the pinned pictures, the subjects and what to keep of each reference, the shots with their timestamps, the camera, the dialogue with its language, the sound and the music. **Back to mine** undoes it. Its cost goes into the account's spending.
+- Ask for a video with **Video** in the composer (its prompt and references come along), **Animate** under a picture in the viewer (the picture becomes the first frame), **Continue as a video** on the frame of a video, or **Make a video from this one** beside a video of the library. The request shows in the feed with what the GPU is doing: preparing the videos, downloading the model, the steps and the time left, the upload. Its details list what it was made from, and **Use prompt** opens the window again with the same pictures and videos.
+- **Settings › Video (GPU)** makes the notebook's token, shows whether the GPU is on and when it turns off, and has **Turn off now**. The runtime turns itself off after the minutes without requests you choose (15 by default), so it spends no credits waiting. A **GPU** chip at the top shows it while it is on.
+- Update note: upload `gpu.php` and the new `colab/` folder with the rest of the app. `.htaccess` (and `docs/nginx.conf.example`) now close `colab/` to the web and pass the Authorization header to `gpu.php`.
+
+### Fixes
+
+- The hosting test says why a process could not start in the language of whoever reads it, not of whoever ran the test.
+
 ## [1.1.0] - 2026-11-22
 
 ### Pictures
@@ -50,5 +67,6 @@ The first public release.
 - English and Brazilian Portuguese.
 - PHP 8.2 or newer with SQLite, no build step. Long requests keep going in the background, or in a separate process (`bin/worker.php`) on hosts that stop web processes early.
 
+[1.2.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.2.0
 [1.1.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.1.0
 [1.0.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.0.0

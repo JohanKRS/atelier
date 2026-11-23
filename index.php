@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__.'/app/bootstrap.php';
-use Studio\{Auth,Vault,OpenAI,Jobs,Users,HttpError,Stories,Writer,Images,Gemini,Catalog};
+use Studio\{Auth,Vault,OpenAI,Jobs,Users,HttpError,Stories,Writer,Images,Gemini,Catalog,Gpu};
 use function Studio\t;
 Studio\headers();
 $action=(string)($_GET['action']??'');
@@ -15,7 +15,7 @@ try {
     if ($secure) header('Strict-Transport-Security: max-age=31536000');
     $vault=new Vault(Studio\privateDirectory($config)); $users=new Users($vault); $auth=new Auth($vault,$users,$config,$secure); $jobs=new Jobs($vault,$config); $stories=new Stories($vault); $writer=new Writer($vault,$stories,$jobs,$config);
     $method=$_SERVER['REQUEST_METHOD'];
-    $reads=['state','gallery','library','captions','albums','image','detail','jobs','history','lineage','preview','users','video','frames','balance','stories','story','story-poll','story-usage','story-review-estimate','reader-about','story-export','story-export-messages','host-test-status','comic-sketch','vn','vn-export'];
+    $reads=['state','gallery','library','captions','albums','image','detail','jobs','history','lineage','preview','users','video','frames','balance','stories','story','story-poll','story-usage','story-review-estimate','reader-about','story-export','story-export-messages','host-test-status','comic-sketch','vn','vn-export','gpu'];
     if ($method!== (in_array($action,$reads,true)?'GET':'POST')) throw new HttpError(405,t('Method not allowed.'));
     // A piece of a video upload is raw bytes, not JSON.
     if ($method==='POST') { $auth->checkCsrf(); $input=$action==='video-chunk' ? [] : Studio\input(); }
@@ -33,7 +33,7 @@ try {
     if ($action==='setup') { $auth->setup((string)($input['name']??''),(string)($input['password']??''),(string)($input['token']??'')); Studio\json(['ok'=>true,'csrf'=>$auth->csrf()]); }
     if ($action==='login') { $auth->login((string)($input['name']??''),(string)($input['password']??''),(string)($input['website']??'')); Studio\json(['ok'=>true,'csrf'=>$auth->csrf()]); }
     // Background reads (thumbnails, previews, polling) don't extend the idle timeout.
-    $key=$auth->key(!in_array($action,['image','jobs','preview','captions','story-poll','story-warm','comic-sketch'],true));
+    $key=$auth->key(!in_array($action,['image','jobs','preview','captions','story-poll','story-warm','comic-sketch','gpu'],true));
     Catalog::use($vault->modelLists($key));
     // Release the session lock: thumbnails, polling and long generations must not wait for one another.
     if (!in_array($action,['logout','password'],true)) session_write_close();
@@ -311,7 +311,8 @@ try {
         $test=new Studio\HostTest($vault->dir); $run=(string)($input['run']??''); $kind=(string)($input['kind']??'');
         if (!preg_match('/\A[a-f0-9]{16}\z/D',$run) || !in_array($kind,Studio\HostTest::KINDS,true) || ($kind==='web-plain')!==($action==='host-test-plain')) throw new HttpError(422,t('Invalid test.'));
         if ($kind==='separate') {
-            $why=Studio\Spawn::unavailable() ?? (Studio\Spawn::start(__DIR__.'/bin/worker.php',['host-test',$run,$vault->dir]) ? null : t('the process could not be started (proc_open failed)'));
+            // Kept in English and shown in the language of whoever reads the result (HostTest::status).
+            $why=Studio\I18n::in('en',fn()=>Studio\Spawn::unavailable()) ?? (Studio\Spawn::start(__DIR__.'/bin/worker.php',['host-test',$run,$vault->dir]) ? null : Studio\I18n::in('en',fn()=>t('the process could not be started (proc_open failed)')));
             if ($why!==null) $test->unavailable($run,$kind,$why);
             Studio\json(['started'=>$why===null]);
         }
@@ -319,7 +320,7 @@ try {
         if (function_exists('ignore_user_abort')) ignore_user_abort(true);
         if (function_exists('set_time_limit')) @set_time_limit(0);
         $finish=function_exists('fastcgi_finish_request') ? 'fastcgi_finish_request' : (function_exists('litespeed_finish_request') ? 'litespeed_finish_request' : null);
-        if ($finish===null) { $test->unavailable($run,$kind,t('this server does not answer before finishing (no litespeed_finish_request or fastcgi_finish_request)')); Studio\json(['started'=>false]); }
+        if ($finish===null) { $test->unavailable($run,$kind,Studio\I18n::in('en',fn()=>t('this server does not answer before finishing (no litespeed_finish_request or fastcgi_finish_request)'))); Studio\json(['started'=>false]); }
         while (ob_get_level()>0 && @ob_end_clean());
         http_response_code(200); header('Content-Type: application/json; charset=utf-8'); echo '{"started":true}'; $finish();
         $test->run($run,$kind);
@@ -334,6 +335,16 @@ try {
     if ($action==='mcp-token') {
         $token=$users->issueToken($auth->user()['id'],$key);
         Studio\json(['token'=>$token,'url'=>Studio\baseUrl($secure).'mcp.php','user'=>Users::summary($users->find($auth->user()['id']))]);
+    }
+    // The video worker (a notebook on a GPU, such as Google Colab): its token, shown once, how it is, when it turns itself
+    // off and a request to turn it off now.
+    if (str_starts_with($action,'gpu')) {
+        $gpu=new Gpu($vault,$config);
+        if ($action==='gpu') Studio\json($gpu->status());
+        if ($action==='gpu-token') { $token=$gpu->issueToken($auth->user()['id'],$key); Studio\json(['token'=>$token,'url'=>Studio\baseUrl($secure)]+$gpu->status()); }
+        if ($action==='gpu-revoke') { $gpu->revokeToken($auth->user()['id']); Studio\json($gpu->status()); }
+        if ($action==='gpu-stop') { $gpu->requestStop(); Studio\json($gpu->status()); }
+        if ($action==='gpu-idle') { $gpu->setIdleMinutes((int)($input['minutes']??0)); Studio\json($gpu->status()); }
     }
     if ($action==='mcp-revoke') { $users->revokeToken($auth->user()['id']); Studio\json(['user'=>Users::summary($users->find($auth->user()['id']))]); }
     if ($action==='users') { $auth->requireAdmin(); Studio\json(['users'=>$users->all()]); }
@@ -473,6 +484,13 @@ try {
     if ($action==='history') Studio\json((new Studio\History($vault,$jobs,$stories))->page($key,['q'=>(string)($_GET['q']??''),'kind'=>(string)($_GET['kind']??'all'),
         'story'=>(string)($_GET['story']??''),'cursor'=>(string)($_GET['cursor']??''),'limit'=>(int)($_GET['limit']??30)])+['now'=>time()]);
     if ($action==='create') { $created=$jobs->create($input,$key); Studio\json(['job'=>$created[0],'jobs'=>$created],201); }
+    // A video, made by the GPU worker when it is on: it waits in line until then.
+    // The prompt helper of the video window: the idea rewritten for H3 by Claude, GPT or Gemini (VideoPrompt).
+    if ($action==='video-prompt') {
+        if (function_exists('set_time_limit')) @set_time_limit(150);
+        Studio\json((new Studio\VideoPrompt($vault))->improve($input,$key));
+    }
+    if ($action==='video-create') { $created=$jobs->createVideo($input,$key); Studio\json(['job'=>$created[0],'jobs'=>$created],201); }
     if ($action==='retry') { $created=$jobs->retry((string)($input['id']??''),(string)($input['from']??''),$input['n']??null,$key); Studio\json(['job'=>$created[0],'jobs'=>$created],201); }
     if ($action==='cancel') Studio\json(['job'=>$jobs->cancel((string)($input['id']??''),$key)]);
     if ($action==='dismiss') { $jobs->dismiss((string)($input['id']??''),$key); Studio\json(['ok'=>true]); }

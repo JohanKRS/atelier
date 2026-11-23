@@ -41,7 +41,7 @@ final class Jobs
      */
     private const INPUTS = ['references','mask'];
     /** The columns of a request without anything heavy (SELECT * would also read what later versions add). */
-    private const COLUMNS = 'id,payload,status,created,updated,phase,user_id,preview,started,worker_lock';
+    private const COLUMNS = 'id,payload,status,created,updated,phase,user_id,preview,started,worker_lock,runner,progress';
     /** Seconds one process spends moving the images of earlier requests out of their rows, at most (the rest go later). */
     private const MOVE_BUDGET = 8.0;
     private float $moving = 0.0;
@@ -227,6 +227,15 @@ final class Jobs
         Vault::validId($id); Vault::validId($from);
         $source = $this->find($from, $key); if (!$source) throw new HttpError(404, t('Request not found.'));
         $source = $this->withInputs($source, $key);
+        if ($source['runner'] !== null) {
+            $existing = $this->batch($id, 1, $key); if ($existing) return $existing;
+            $p = $source['payload'];
+            [$p['options']] = Gpu::options($p['options'], array_map(fn($m) => array_intersect_key($m, array_flip(['kind','role','at'])), $p['media'] ?? []));
+            $p['image_ids'] = []; $p['error'] = null; unset($p['dismissed'], $p['error_kind'], $p['upload'], $p['made']);
+            if ($album !== null) { Vault::validId($album); $p['album'] = $album; }
+            $this->insert($id, $p, $key, 'gpu');
+            return [$this->publicJob($this->find($id, $key))];
+        }
         $count = $n === null ? (int)($source['payload']['options']['n'] ?? 1) : (int)(filter_var($n, FILTER_VALIDATE_INT) ?: 1);
         $existing = $this->batch($id, $count, $key); if ($existing) return $existing;
         $p = $source['payload'];
@@ -241,10 +250,10 @@ final class Jobs
     }
 
     /** True when the request is new (false: the id was already taken). */
-    private function insert(string $id, array $payload, string $key): bool
+    private function insert(string $id, array $payload, string $key, ?string $runner = null): bool
     {
-        $q = $this->vault->db->prepare('INSERT OR IGNORE INTO jobs(id,payload,status,created,updated,phase,user_id) VALUES(?,CAST(? AS BLOB),?,?,?,NULL,?)');
-        $q->execute([$id, $this->sealPayload($id, $payload, $key), 'queued', time(), time(), $this->vault->owner()]);
+        $q = $this->vault->db->prepare('INSERT OR IGNORE INTO jobs(id,payload,status,created,updated,phase,user_id,runner) VALUES(?,CAST(? AS BLOB),?,?,?,NULL,?,?)');
+        $q->execute([$id, $this->sealPayload($id, $payload, $key), 'queued', time(), time(), $this->vault->owner(), $runner]);
         return $q->rowCount() === 1;
     }
 
@@ -348,13 +357,20 @@ final class Jobs
             'dismissed'=>!empty($p['dismissed']),'previews'=>(int)($r['preview'] ?? 0),
             'variation'=>self::variationInfo($p),'watched'=>!empty($r['worker_lock']),'cleaned'=>self::cleanedOf($p),
             'typed'=>is_string($p['typed'] ?? null) ? $p['typed'] : null]
-            + ['album'=>$album, 'apart'=>$album !== null && ($this->apart[$album] ??= $this->vault->keepsApart($album))];
+            + ['album'=>$album, 'apart'=>$album !== null && ($this->apart[$album] ??= $this->vault->keepsApart($album))]
+            // A video for the GPU worker: what it reports while making it (steps done, its own line about what it does).
+            // Its inputs without their data: kind, role, moment, library id (pictures and videos) and a sound's name.
+            + (($r['runner'] ?? null) !== null ? ['runner'=>$r['runner'], 'kind'=>'video', 'roles'=>$p['roles'] ?? [],
+                'inputs'=>array_map(fn($m) => array_intersect_key($m, array_flip(['kind','role','at','id','name','duration'])), $p['media'] ?? []),
+                'progress'=>is_string($r['progress'] ?? null) ? json_decode($r['progress'], true) : null, 'made'=>$p['made'] ?? null] : []);
     }
     /** Album id => whether it keeps its items out of the library, as read in this process. */
     private array $apart = [];
 
     private static function errorFor(array $r): ?string
     {
+        if ($r['status'] === 'uncertain' && empty($r['payload']['error']) && ($r['runner'] ?? null) !== null)
+            return t('The GPU stopped answering while it made this video: its runtime was probably turned off or disconnected (in Colab Pro, keep the notebook\'s tab open). Make it again when the GPU is on.');
         if ($r['status'] === 'uncertain' && empty($r['payload']['error'])) {
             // How long the process ran until its last sign of life, and what it was doing: a host limit stops it at
             // about the same time every time.
@@ -403,10 +419,17 @@ final class Jobs
     private function markStale(): void
     {
         $now = time();
-        $q = $this->vault->db->prepare("SELECT id,status,updated,started,phase,worker_lock FROM jobs WHERE status IN ('running','cancelling') AND updated<?");
+        $q = $this->vault->db->prepare("SELECT id,status,updated,started,phase,worker_lock,runner FROM jobs WHERE status IN ('running','cancelling') AND updated<?");
         $q->execute([$now - self::CHECK_AFTER]);
         foreach ($q->fetchAll() as $r) {
             $silent = $now - (int)$r['updated']; $locked = !empty($r['worker_lock']);
+            // A video on the GPU worker: the worker speaks every few seconds while it works, also while it uploads.
+            if ($r['runner'] !== null) {
+                if ($silent <= Gpu::STALE) continue;
+                $u = $this->vault->db->prepare('UPDATE jobs SET status=? WHERE id=? AND status=? AND updated=?');
+                $u->execute([$r['status'] === 'cancelling' ? 'cancelled' : 'uncertain', $r['id'], $r['status'], $r['updated']]);
+                continue;
+            }
             // A cancellation waits for the process only as long as before: whoever cancelled wants it gone.
             $limit = $r['status'] === 'cancelling' ? self::STALE_AFTER : ($locked ? $this->ceiling() : self::STALE_AFTER);
             if ($silent <= $limit && !($locked && !$this->workerAlive((string)$r['id']))) continue;
@@ -563,6 +586,8 @@ final class Jobs
     public function run(string $id, string $key, ?ImageClient $api = null, ?\Closure $keepalive = null, ?\Closure $onClaimed = null): array
     {
         Vault::validId($id); $job = $this->find($id, $key); if (!$job) throw new HttpError(404, t('Request not found.'));
+        // A video is made by the GPU worker, which takes it from the queue itself (Gpu).
+        if ($job['runner'] !== null) return $this->publicJob($job);
         $lock = $this->lockWorker($id);
         // Another process holds this request's lock: it is starting or running it.
         if ($lock === false) return $this->publicJob($this->find($id, $key));
@@ -572,7 +597,7 @@ final class Jobs
             try {
                 $this->markStale();
                 // The limit is shared by every account: it protects the host's PHP workers.
-                $q = $this->vault->db->prepare("UPDATE jobs SET status='running',phase='starting',updated=:now,started=:now,worker_lock=:lock WHERE id=:id AND user_id=:owner AND status='queued' AND (SELECT COUNT(*) FROM jobs WHERE status IN ('running','cancelling'))<:max");
+                $q = $this->vault->db->prepare("UPDATE jobs SET status='running',phase='starting',updated=:now,started=:now,worker_lock=:lock WHERE id=:id AND user_id=:owner AND status='queued' AND runner IS NULL AND (SELECT COUNT(*) FROM jobs WHERE status IN ('running','cancelling') AND runner IS NULL)<:max");
                 // Bound as integers: SQLite ranks any number below any text, so a string limit would never hold.
                 $q->bindValue(':now', time(), \PDO::PARAM_INT); $q->bindValue(':lock', $lock === null ? 0 : 1, \PDO::PARAM_INT);
                 $q->bindValue(':id', $id); $q->bindValue(':owner', $this->vault->owner()); $q->bindValue(':max', $this->maxParallel(), \PDO::PARAM_INT);
@@ -605,7 +630,7 @@ final class Jobs
     public function runSeparately(string $id, string $key, ?string $script = null): ?array
     {
         Vault::validId($id); $job = $this->find($id, $key); if (!$job) throw new HttpError(404, t('Request not found.'));
-        if ($job['status'] !== 'queued') return $this->publicJob($job);
+        if ($job['status'] !== 'queued' || $job['runner'] !== null) return $this->publicJob($job);
         $dir = $this->vault->dir;
         if ($script === null && Spawn::failedRecently($dir)) return null;
         $said = Spawn::run($dir, $script ?? Spawn::worker(), ['job', $id, $this->vault->owner(), $dir], sodium_bin2hex($key));
@@ -805,6 +830,209 @@ final class Jobs
 
     private function phase(string $id, string $phase): void
     { $q = $this->vault->db->prepare('UPDATE jobs SET phase=?,updated=? WHERE id=?'); $q->execute([$phase, time(), $id]); }
+
+    // -------------------------------------------------------------------------------------------------------------
+    // Videos, made by the GPU worker (Gpu, gpu.php)
+    // -------------------------------------------------------------------------------------------------------------
+
+    /**
+     * A video request: the prompt, the model and its options, and what it brings (inputs): pictures (a gallery id or a
+     * data URL) pinned at a moment of the video (role key, at: seconds or 'end') or taken as references (ref), videos of
+     * the library (ref, or the source the video starts from) and sounds (a data URL, key or ref). It waits in line until
+     * the GPU worker takes it. The pictures go with the request as data URLs (references); the videos stay in the library
+     * and the worker downloads them (videoMedia).
+     * @return list<array> the request, as create() returns its jobs
+     */
+    public function createVideo(array $input, string $key): array
+    {
+        $id = (string)($input['id'] ?? ''); Vault::validId($id);
+        $existing = $this->batch($id, 1, $key); if ($existing) return $existing;
+        $prompt = trim((string)($input['prompt'] ?? ''));
+        if ($prompt === '' || mb_strlen($prompt) > 8000) throw new HttpError(422, t('Describe the video in up to 8,000 characters.'));
+        $raw = $input['inputs'] ?? [];
+        if (!is_array($raw) || count($raw) > 16) throw new HttpError(422, t('Invalid picture.'));
+        $inputs = [];
+        foreach (array_values($raw) as $in) {
+            if (!is_array($in) || !in_array($in['kind'] ?? null, ['image','video','audio'], true) || !in_array($in['role'] ?? null, ['key','ref','source'], true)) throw new HttpError(422, t('Invalid picture.'));
+            $inputs[] = ['kind'=>$in['kind'], 'role'=>$in['role']] + (array_key_exists('at', $in) ? ['at'=>$in['at']] : []);
+        }
+        [$options, $inputs] = Gpu::options(is_array($input['options'] ?? null) ? $input['options'] : [], $inputs);
+        $engine = Gpu::engine($options['engine']);
+        $references = []; $media = []; $parents = [];
+        foreach (array_values($raw) as $n => $in) {
+            $entry = $inputs[$n];
+            if ($entry['kind'] === 'image') {
+                if (isset($in['id'])) {
+                    $im = $this->vault->still((string)$in['id'], $key); $parents[] = $im['id']; $entry['id'] = $im['id'];
+                    $url = 'data:'.$im['mime'].';base64,'.base64_encode($this->vault->bytes($im['id'], 'full', $key));
+                } else $url = (string)($in['data'] ?? '');
+                $entry['ref'] = count($references); $references[] = OpenAI::imageInput($url)['url'];
+            } elseif ($entry['kind'] === 'video') {
+                $video = $this->vault->video((string)($in['id'] ?? ''), $key);
+                $limits = $engine['limits']['video_seconds'];
+                if ($entry['role'] === 'ref' && (float)$video['duration'] < $limits[0]) throw new HttpError(422, t('Reference videos need at least {n} seconds.', ['n'=>$limits[0]]));
+                $entry += ['id'=>$video['id'], 'duration'=>(float)$video['duration'], 'width'=>(int)$video['width'], 'height'=>(int)$video['height']];
+                $parents[] = $video['id'];
+            } else {
+                // A sound goes with the pictures, in the request's private file, not in its row.
+                $sound = self::audioInput((string)($in['data'] ?? ''), (string)($in['name'] ?? ''), (int)$engine['limits']['audio_mb']);
+                $entry += ['ref'=>count($references), 'name'=>$sound['name']]; $references[] = $sound['data'];
+            }
+            $media[] = $entry;
+        }
+        $label = trim(preg_replace('/\s+/u', ' ', (string)($input['label'] ?? '')) ?? '');
+        $payload = ['kind'=>'video','prompt'=>$prompt,'options'=>$options,'references'=>$references,'media'=>$media,'roles'=>array_map(fn($m) => $m['role'], $media),
+            'parent_ids'=>array_values(array_unique($parents)),'mask'=>null,'parent_id'=>null,'operation'=>'video','label'=>$label === '' ? null : mb_substr($label, 0, 200),'image_ids'=>[],'error'=>null];
+        if (isset($input['album'])) { Vault::validId((string)$input['album']); if ($this->vault->hasAlbum((string)$input['album'])) $payload['album'] = (string)$input['album']; }
+        $this->insert($id, $payload, $key, 'gpu');
+        return [$this->publicJob($this->find($id, $key))];
+    }
+
+    /** A sound sent with a video request, as a data URL of up to $mb MB (MP3, WAV, OGG, M4A, AAC, FLAC or WebM). */
+    private static function audioInput(string $url, string $name, int $mb): array
+    {
+        if (!preg_match('#\Adata:(audio/(?:mpeg|mp3|wav|x-wav|wave|vnd\.wave|ogg|mp4|x-m4a|m4a|aac|flac|x-flac|webm));base64,([A-Za-z0-9+/=]+)\z#D', $url, $m))
+            throw new HttpError(422, t('Use a sound in MP3, WAV, OGG, M4A, AAC or FLAC.'));
+        $bytes = base64_decode($m[2], true);
+        if ($bytes === false || $bytes === '') throw new HttpError(422, t('Use a sound in MP3, WAV, OGG, M4A, AAC or FLAC.'));
+        if (strlen($bytes) > $mb * 1048576) throw new HttpError(422, t('Use sounds of up to {n} MB.', ['n'=>$mb]));
+        $name = trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $name) ?? '');
+        return ['data'=>$url, 'name'=>mb_substr($name, 0, 120)];
+    }
+
+    /** A video request the worker is making (or was, when it went silent), or a 409 the worker reads as "drop it". */
+    private function videoJob(string $id, string $key, array $statuses = ['running','cancelling','uncertain']): array
+    {
+        Vault::validId($id); $job = $this->find($id, $key);
+        if (!$job || $job['runner'] === null) throw new HttpError(404, t('Request not found.'));
+        if (!in_array($job['status'], $statuses, true)) throw new HttpError(409, t('This request is no longer running.'));
+        return $job;
+    }
+
+    /** A video of a request the worker is making ($index: its place in the request's list), to send it to the worker. */
+    public function videoMedia(string $id, int $index, string $key): array
+    {
+        $m = $this->videoJob($id, $key, ['running','uncertain'])['payload']['media'][$index] ?? null;
+        if (!is_array($m) || $m['kind'] !== 'video') throw new HttpError(404, t('Video not found.'));
+        return $this->vault->video((string)$m['id'], $key);
+    }
+
+    /**
+     * The oldest video request of the account that the worker can make ($engines: the models it runs; none: any), taken
+     * for it, with the prompt and the pictures. Null when there is none.
+     */
+    public function claimVideo(array $engines, string $key): ?array
+    {
+        $this->markStale();
+        $q = $this->vault->db->prepare("SELECT id FROM jobs WHERE user_id=? AND runner='gpu' AND status='queued' ORDER BY created, rowid LIMIT 20");
+        $q->execute([$this->vault->owner()]); $ids = $q->fetchAll(\PDO::FETCH_COLUMN);
+        foreach ($ids as $id) {
+            $job = $this->find((string)$id, $key); if (!$job) continue;
+            if ($engines && !in_array($job['payload']['options']['engine'] ?? '', $engines, true)) continue;
+            $u = $this->vault->db->prepare("UPDATE jobs SET status='running',phase='claimed',progress=NULL,updated=:now,started=:now WHERE id=:id AND status='queued' AND runner='gpu'");
+            $u->bindValue(':now', time(), \PDO::PARAM_INT); $u->bindValue(':id', $id); $u->execute();
+            if ($u->rowCount() !== 1) continue;
+            try { $job = $this->withInputs($job, $key); }
+            catch (HttpError $e) { $this->endVideo((string)$id, $job['payload'], 'failed', $e->getMessage(), $key); continue; }
+            $p = $job['payload'];
+            // Pictures and sounds go as data URLs; a video goes as its place in the list and its size, for videoMedia.
+            $inputs = [];
+            foreach ($p['media'] ?? [] as $n => $m) {
+                $entry = ['kind'=>$m['kind'], 'role'=>$m['role']] + (array_key_exists('at', $m) ? ['at'=>$m['at']] : []);
+                if ($m['kind'] === 'image') $entry['data'] = $p['references'][$m['ref']] ?? '';
+                elseif ($m['kind'] === 'audio') $entry += ['data'=>$p['references'][$m['ref']] ?? '', 'name'=>$m['name'] ?? ''];
+                else {
+                    try { $video = $this->vault->video((string)$m['id'], $key); }
+                    catch (HttpError) { $this->endVideo((string)$id, $p, 'failed', t('A video of this request is no longer in the library.'), $key); continue 2; }
+                    $entry += ['index'=>$n, 'size'=>(int)$video['size'], 'mime'=>(string)$video['mime'], 'duration'=>(float)$video['duration']];
+                }
+                $inputs[] = $entry;
+            }
+            return ['id'=>(string)$id, 'prompt'=>$p['prompt'], 'options'=>$p['options'], 'inputs'=>$inputs, 'created'=>(int)$job['created']];
+        }
+        return null;
+    }
+
+    /**
+     * What the worker reports while it makes a video: its phase (loading, generating, decoding, uploading), the steps done
+     * and their total, and a line of its own. Returns true when the owner asked to cancel it.
+     */
+    public function videoProgress(string $id, array $report, string $key): bool
+    {
+        $this->videoJob($id, $key);
+        $phase = preg_replace('/[^a-z-]/', '', (string)($report['phase'] ?? '')) ?: 'generating';
+        $progress = ['message'=>mb_substr(trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string)($report['message'] ?? '')) ?? ''), 0, 200)];
+        foreach (['done','total','eta'] as $name) if (is_int($report[$name] ?? null) && $report[$name] >= 0) $progress[$name] = $report[$name];
+        $q = $this->vault->db->prepare("UPDATE jobs SET updated=?,phase=?,progress=?,status=CASE status WHEN 'uncertain' THEN 'running' ELSE status END WHERE id=? AND user_id=? AND runner='gpu' AND status IN ('running','cancelling','uncertain')");
+        $q->execute([time(), mb_substr($phase, 0, 30), json_encode($progress, JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE), $id, $this->vault->owner()]);
+        $q = $this->vault->db->prepare('SELECT status FROM jobs WHERE id=?'); $q->execute([$id]);
+        return $q->fetchColumn() === 'cancelling';
+    }
+
+    /** Starts the upload of the finished video; its pieces go through Vault::appendUpload, checked against this request. */
+    public function startVideoUpload(string $id, int $size, int $maxBytes, string $key): string
+    {
+        $job = $this->videoJob($id, $key, ['running','uncertain']);
+        $upload = $this->vault->startUpload($size, $maxBytes);
+        $job['payload']['upload'] = $upload;
+        $this->savePayload($id, $job['payload'], $key); $this->phase($id, 'uploading');
+        return $upload;
+    }
+
+    /** The upload of a request's video, to receive its pieces (the worker sends the request's id with each one). */
+    public function videoUpload(string $id, string $upload, string $key): void
+    {
+        $job = $this->videoJob($id, $key, ['running','uncertain']);
+        if (($job['payload']['upload'] ?? null) !== $upload) throw new HttpError(409, t('This upload belongs to another request.'));
+        $q = $this->vault->db->prepare('UPDATE jobs SET updated=? WHERE id=?'); $q->execute([time(), $id]);
+    }
+
+    /**
+     * The video is complete on the server: it becomes a library item with the request's prompt, the pictures it came from
+     * and how it was made ($info: width, height, duration, fps, frames, audio, seed, and the seconds it took). Repeating the
+     * call after a lost answer returns the request as it ended.
+     */
+    public function finishVideo(string $id, string $upload, array $info, string $poster, string $key): array
+    {
+        Vault::validId($id); $job = $this->find($id, $key);
+        if ($job && $job['status'] === 'completed' && !empty($job['payload']['image_ids'])) return $this->publicJob($job);
+        $job = $this->videoJob($id, $key, ['running','uncertain','cancelling']);
+        $p = $job['payload'];
+        if (($p['upload'] ?? null) !== $upload) throw new HttpError(409, t('This upload belongs to another request.'));
+        $title = $p['label'] ?? mb_substr(preg_replace('/\s+/u', ' ', $p['prompt']) ?? '', 0, 80);
+        $seed = is_int($info['seed'] ?? null) ? $info['seed'] : null;
+        $item = $this->vault->finishUpload($upload, ['name'=>$title] + $info, $poster, $key,
+            ['title'=>$title, 'prompt'=>$p['prompt'], 'original_prompt'=>$p['prompt'], 'options'=>['seed'=>$seed] + $p['options'], 'parent_ids'=>$p['parent_ids'] ?? [],
+             'job_id'=>$id, 'generated'=>true, 'audio'=>($info['audio'] ?? false) === true, 'seed'=>$seed, 'engine'=>$p['options']['engine'] ?? null],
+            is_string($p['album'] ?? null) ? $p['album'] : null);
+        $p['image_ids'] = [$item['id']];
+        $p['made'] = array_filter(['seed'=>$seed, 'seconds'=>is_int($info['took'] ?? null) ? $info['took'] : null, 'gpu'=>is_string($info['gpu'] ?? null) ? mb_substr($info['gpu'], 0, 80) : null], fn($v) => $v !== null);
+        unset($p['upload']);
+        $q = $this->vault->db->prepare("UPDATE jobs SET payload=CAST(? AS BLOB),status='completed',phase=NULL,progress=NULL,updated=? WHERE id=?");
+        $q->execute([$this->sealPayload($id, $p, $key), time(), $id]);
+        return $this->publicJob($this->find($id, $key));
+    }
+
+    /** The worker could not make the video ($error says why), or stopped it because the owner cancelled it. */
+    public function failVideo(string $id, string $error, bool $cancelled, string $key): array
+    {
+        Vault::validId($id); $job = $this->find($id, $key);
+        if (!$job || $job['runner'] === null) throw new HttpError(404, t('Request not found.'));
+        if (!in_array($job['status'], ['running','cancelling','uncertain'], true)) return $this->publicJob($job);
+        $error = mb_substr(trim(preg_replace('/\s+/u', ' ', $error) ?? ''), 0, 600);
+        $cancelled = $cancelled || $job['status'] === 'cancelling';
+        $this->endVideo($id, $job['payload'], $cancelled ? 'cancelled' : 'failed',
+            $cancelled ? t('Cancelled. The GPU stopped making the video.') : ($error === '' ? t('The GPU could not make the video.') : t('The GPU could not make the video: {error}', ['error'=>$error])), $key);
+        return $this->publicJob($this->find($id, $key));
+    }
+
+    private function endVideo(string $id, array $p, string $status, string $error, string $key): void
+    {
+        if (is_string($p['upload'] ?? null)) { try { $this->vault->abortUpload($p['upload']); } catch (\Throwable) { /* already gone */ } }
+        unset($p['upload']); $p['error'] = $error;
+        $q = $this->vault->db->prepare('UPDATE jobs SET payload=CAST(? AS BLOB),status=?,phase=NULL,progress=NULL,updated=? WHERE id=?');
+        $q->execute([$this->sealPayload($id, $p, $key), $status, time(), $id]);
+    }
 
     /** Updates the payload without touching the status, so a pending cancellation is preserved. */
     private function savePayload(string $id, array $payload, string $key): void

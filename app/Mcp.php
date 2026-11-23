@@ -14,7 +14,7 @@ namespace Studio;
 final class Mcp
 {
     public const PROTOCOLS = ['2025-11-25','2025-06-18','2025-03-26','2024-11-05'];
-    public const VERSION = '1.1.0';
+    public const VERSION = '1.2.0';
     private const LONG_TOOLS = ['generate_image','edit_image','upscale_image'];
     /** Story tools that may wait for a picture still being made (a reference, the previous page), so they are streamed too. */
     private const STORY_WAITS = ['illustrate','character_sheet','set_style','edit_illustration','draw_comic_page','comic_settings','make_sprite','make_background','make_cg','update_art'];

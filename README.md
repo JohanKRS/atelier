@@ -23,6 +23,7 @@ Describe what you want, pick a shape and a quality, and generate. Atelier works 
 - **One-click helpers.** Upscale, expand the canvas, make it photoreal, enhance it, or clean up noise and stray lines.
 - **Nothing gets lost.** Every edit becomes a new version in a tree. Go back, compare with the original, or branch off in another direction.
 - **A library you can find things in.** Albums, favourites, stacks, hidden pictures, search by prompt, sort by size or shape. Videos too: drop in a clip, pick a frame and edit it.
+- **Videos with sound, on your own GPU.** Start from text, pin pictures at the first frame, the last one or any second in between, bring pictures, videos and sounds as references, or start from a video: continue it, follow its movement, or replace a part of it. A prompt helper rewrites your idea the way the model (MiniMax H3) understands best. It runs on a GPU you rent by the hour, such as Google Colab: a notebook there takes the requests, sends the videos to your library and turns itself off when you stop. See [Videos on a GPU](docs/install.md#videos-on-a-gpu-google-colab).
 
 ![A lighthouse and its edits, in the version tree](docs/screenshots/versions.webp)
 

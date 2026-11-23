@@ -65,6 +65,7 @@ $iconVersion = substr(md5($iconStamp), 0, 10);
     </div>
     <span class="grow"></span>
     <button id="activity" class="activity" type="button" hidden><span class="spinner small" aria-hidden="true"></span><span id="activity-text"></span></button>
+    <button id="gpu-chip" class="balance-chip gpu-chip" type="button" hidden><span class="gpu-dot" aria-hidden="true"></span><span class="balance-label">GPU</span><span class="balance-text" id="gpu-chip-text"></span></button>
     <span id="balances" class="balances">
       <button id="balance-chip-openai" class="balance-chip" data-account="openai" type="button" hidden><span class="balance-label">OpenAI</span><span class="balance-text"></span></button>
       <button id="balance-chip-claude" class="balance-chip" data-account="claude" type="button" hidden><span class="balance-label">Claude</span><span class="balance-text"></span></button>
@@ -94,6 +95,7 @@ from behind, looking at the sea') ?>"></textarea></label>
             <button type="button" id="file-open" class="tool" title="<?= e('References from the computer (you can also drag or paste them)') ?>"><span data-icon="image-plus"></span><span><?= e('File') ?></span></button>
             <button type="button" id="gallery-refs" class="tool" title="<?= e('Choose one or more images from the gallery as references') ?>"><span data-icon="gallery"></span><span><?= e('Gallery') ?></span></button>
             <button type="button" id="vary-open" class="tool" aria-pressed="false" title="<?= e('Several different images from a single request: the app varies each one, or you write one line per image') ?>"><span data-icon="variations"></span><span><?= e('Variations') ?></span></button>
+            <button type="button" id="video-open" class="tool" title="<?= e('A video with sound from this prompt, made on your GPU (Colab). The references go with it.') ?>"><span data-icon="video"></span><span><?= e('Video') ?></span></button>
             <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
           </div>
           <div class="vary-box" id="vary-box" hidden>
@@ -417,6 +419,7 @@ from behind, looking at the sea') ?>"></textarea></label>
       <div id="stage-loading" class="stage-loading" hidden><span class="spinner"></span></div>
       <div class="stage-bar" id="stage-bar">
         <button type="button" id="compare" class="chip" aria-pressed="false" hidden><span data-icon="compare"></span><span id="compare-text"><?= e('Compare') ?></span></button>
+        <button type="button" id="animate-open" class="chip image-only" title="<?= e('A video with sound that starts from this image, made on your GPU (Colab).') ?>"><span data-icon="video"></span><span><?= e('Animate') ?></span></button>
         <span id="stage-meta" class="muted"></span>
         <button type="button" id="zoom-reset" class="chip" hidden title="<?= e('Fit to the screen (key 0)') ?>"><span id="zoom-text">100%</span><span><?= e('Fit') ?></span></button>
       </div>
@@ -454,11 +457,17 @@ from behind, looking at the sea') ?>"></textarea></label>
             <button type="button" id="frame-edit" class="btn primary"><span data-icon="pencil"></span><?= e('Edit this frame') ?></button>
             <button type="button" id="frame-upscale" class="btn secondary"><span data-icon="upscale"></span><?= e('Upscale', ['ctx' => 'action']) ?></button>
             <button type="button" id="frame-reference" class="btn secondary"><span data-icon="image-plus"></span><?= e('Use as reference') ?></button>
+            <button type="button" id="frame-animate" class="btn secondary"><span data-icon="video"></span><?= e('Continue as a video') ?></button>
             <button type="button" id="frame-save" class="btn secondary"><span data-icon="camera"></span><?= e('Save to the gallery') ?></button>
             <button type="button" id="frame-download" class="btn ghost"><span data-icon="download"></span><?= e('Download PNG') ?></button>
           </div>
           <p id="frame-status" class="hint" aria-live="polite"></p>
           <p class="hint"><?= e('Comma and period move one frame; with Shift, 10. ← and → go to the previous or next item. Space plays or pauses. The mouse wheel zooms in to check details. The frame is saved at the video\'s resolution.') ?></p>
+        </section>
+        <section class="stack" id="video-from-part">
+          <h3><?= e('A new video from this one') ?></h3>
+          <p class="hint"><?= e('On the GPU: continue it, redo it following its movement, or replace a part of it.') ?></p>
+          <div><button type="button" id="video-from" class="btn secondary"><span data-icon="video"></span><?= e('Make a video from this one') ?></button></div>
         </section>
         <section id="video-upload" class="upload-box" hidden>
           <div class="upload-head"><span id="video-upload-text" class="grow"></span><button type="button" id="video-upload-action" class="link-btn"></button></div>
@@ -643,6 +652,7 @@ from behind, looking at the sea') ?>"></textarea></label>
       <p class="settings-group"><?= e('Account') ?></p>
       <button type="button" class="settings-tab" data-pane="account" aria-controls="settings-account"><span data-icon="user"></span><span><?= e('Name and password') ?></span></button>
       <button type="button" class="settings-tab" data-pane="mcp" aria-controls="settings-mcp"><span data-icon="plug"></span><span><?= e('MCP access') ?></span></button>
+      <button type="button" class="settings-tab" data-pane="gpu" aria-controls="settings-gpu"><span data-icon="video"></span><span><?= e('Video (GPU)') ?></span></button>
       <button type="button" class="settings-tab" data-pane="about" aria-controls="settings-about"><span data-icon="book"></span><span><?= e('About me as a reader') ?></span></button>
       <button type="button" class="settings-tab" data-pane="language" aria-controls="settings-language"><span data-icon="globe"></span><span><?= e('Language') ?></span></button>
       <p class="settings-group"><?= e('System') ?></p>
@@ -816,6 +826,39 @@ from behind, looking at the sea') ?>"></textarea></label>
         </div>
       </section>
 
+      <section class="settings-pane" id="settings-gpu" aria-labelledby="settings-gpu-title" hidden>
+        <div class="pane-head">
+          <h3 id="settings-gpu-title"><?= e('Video (GPU)') ?></h3>
+          <p class="hint"><?= e('Videos with sound made with open models on a GPU you rent by the hour, such as Google Colab. A notebook there takes this account\'s video requests, makes them and sends them to the library, and turns its runtime off by itself when no request comes, so it spends no credits waiting.') ?></p>
+        </div>
+        <div class="settings-card stack" id="gpu-card">
+          <div class="gpu-now"><span class="gpu-dot" aria-hidden="true"></span><strong id="gpu-state"></strong></div>
+          <p id="gpu-detail" class="hint"></p>
+          <div class="row-end"><button type="button" id="gpu-stop" class="btn ghost small danger-text" hidden><?= e('Turn off now') ?></button><span class="grow"></span><a id="gpu-notebook" class="btn secondary small" target="_blank" rel="noopener noreferrer"><span data-icon="video"></span><?= e('Open the notebook in Colab') ?></a></div>
+        </div>
+        <div class="settings-card stack">
+          <h4><?= e('Worker token') ?></h4>
+          <p id="gpu-token-status" class="hint"></p>
+          <div id="gpu-token-output" class="stack" hidden></div>
+          <div class="row-end"><button type="button" id="gpu-revoke" class="btn ghost small danger-text"><?= e('Revoke') ?></button><span class="grow"></span><button type="button" id="gpu-token" class="btn primary small"><?= e('Make a token') ?></button></div>
+        </div>
+        <div class="settings-card stack">
+          <label><?= e('Turn the GPU off after') ?><select id="gpu-idle"></select></label>
+          <p class="hint"><?= e('Minutes without video requests. Each session downloads and loads the model again (a few minutes), so a longer wait is better while you are still making videos.') ?></p>
+        </div>
+        <div class="settings-card stack gpu-steps">
+          <h4><?= e('How to turn it on') ?></h4>
+          <ol>
+            <li><?= e('Make a token here and copy it.') ?></li>
+            <li><?= e('Open the notebook in Colab. In Secrets (the key on the left), add ATELIER_URL with this site\'s address and ATELIER_TOKEN with the token, with notebook access on.') ?></li>
+            <li><?= e('Choose the A100 GPU (Runtime › Change runtime type) and Runtime › Run all. Requests made meanwhile wait in line.') ?></li>
+          </ol>
+          <p class="hint"><?= e('In Colab Pro keep the notebook\'s tab open while you use it. An A100 80 GB uses about 7 to 15 compute units per hour, while it is on.') ?></p>
+          <p class="hint" id="gpu-license"></p>
+          <p class="hint"><?= e('Colab does not allow deepfakes: don\'t make videos of real people\'s faces.') ?></p>
+        </div>
+      </section>
+
       <section class="settings-pane" id="settings-about" aria-labelledby="settings-about-title" hidden>
         <div class="pane-head">
           <h3 id="settings-about-title"><?= e('About me as a reader') ?></h3>
@@ -891,6 +934,59 @@ from behind, looking at the sea') ?>"></textarea></label>
   <div id="history-story" class="history-story" hidden></div>
   <div id="requests-list" class="requests"></div>
   <div id="history-foot" class="history-foot"></div>
+</dialog>
+
+<dialog id="video-dialog" class="sheet wide video-sheet" aria-labelledby="video-title">
+  <form id="video-form" class="stack" novalidate>
+    <div class="sheet-head"><h2 id="video-title"><?= e('New video') ?></h2><button type="button" class="icon-btn" data-close="video-dialog" data-icon="close" aria-label="<?= e('Close') ?>"></button></div>
+    <button type="button" id="video-gpu" class="gpu-line"><span class="gpu-dot" aria-hidden="true"></span><span id="video-gpu-text"></span></button>
+    <div class="segmented small" id="video-kinds" role="group" aria-label="<?= e('Kind of video') ?>">
+      <button type="button" data-video-kind="new" aria-pressed="true"><?= e('New video') ?></button>
+      <button type="button" data-video-kind="video" aria-pressed="false"><?= e('From a video') ?></button>
+    </div>
+    <div class="field" id="video-keys-part">
+      <span class="field-title"><?= e('Pinned pictures') ?></span>
+      <p class="hint"><?= e('The video passes exactly through these pictures: the first frame, the last one and any moment in between. All optional.') ?></p>
+      <div id="video-keys" class="video-frames video-keys"></div>
+    </div>
+    <div class="field" id="video-source-part" hidden>
+      <span class="field-title"><?= e('The video') ?></span>
+      <div id="video-source" class="video-frames"></div>
+      <label><?= e('What to do') ?><select id="video-op"></select></label>
+      <p class="hint" id="video-op-hint"></p>
+      <label id="video-target-label"><?= e('What to replace, in English') ?><input type="text" id="video-target" maxlength="120" autocomplete="off" spellcheck="false" placeholder="<?= e('the red car') ?>"></label>
+      <label class="switch" id="video-join-label"><input type="checkbox" id="video-join" checked><span class="switch-track" aria-hidden="true"></span><span><?= e('Join it to the end of the original video') ?></span></label>
+      <label class="switch" id="video-keep-audio-label"><input type="checkbox" id="video-keep-audio" checked><span class="switch-track" aria-hidden="true"></span><span><?= e('Keep the sound of the original video') ?></span></label>
+    </div>
+    <div class="field">
+      <span class="field-title"><?= e('References') ?></span>
+      <p class="hint" id="video-refs-hint"></p>
+      <div id="video-refs" class="video-frames"></div>
+      <div class="video-add">
+        <button type="button" class="btn small ghost" id="video-add-picture"><span data-icon="image-plus"></span><?= e('Picture') ?></button>
+        <button type="button" class="btn small ghost" id="video-add-video"><span data-icon="video"></span><?= e('Video') ?></button>
+        <button type="button" class="btn small ghost" id="video-add-sound"><span data-icon="music"></span><?= e('Sound') ?></button>
+        <input type="file" id="video-sound-file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" hidden>
+      </div>
+    </div>
+    <label class="prompt-box video-prompt"><span class="sr-only"><?= e('Describe the video') ?></span><textarea id="video-prompt" rows="6" maxlength="8000" placeholder="<?= e('What happens, second by second: the action, the camera, the voices and sounds, the music') ?>"></textarea></label>
+    <div class="video-improve">
+      <button type="button" class="btn small secondary" id="video-improve"><span data-icon="sparkle"></span><?= e('Improve the prompt') ?></button>
+      <label class="sr-only" for="video-improve-with"><?= e('Model that improves the prompt') ?></label><select id="video-improve-with"></select>
+      <button type="button" class="btn small ghost" id="video-improve-undo" hidden><span data-icon="undo"></span><?= e('Back to mine') ?></button>
+      <span class="hint grow" id="video-improve-note" aria-live="polite"></span>
+    </div>
+    <div class="video-options">
+      <label><?= e('Length') ?><span class="range-row"><input type="range" id="video-seconds" min="5" max="15" step="1" value="5"><output id="video-seconds-out"></output></span></label>
+      <label id="video-aspect-label"><?= e('Aspect ratio') ?><select id="video-aspect"></select></label>
+      <label><?= e('Resolution') ?><select id="video-resolution"></select></label>
+      <label><?= e('Quality') ?><select id="video-quality"></select></label>
+      <label><?= e('Seed (optional)') ?><input type="number" id="video-seed" min="0" step="1" inputmode="numeric" placeholder="<?= e('Random') ?>"></label>
+    </div>
+    <p class="hint" id="video-note"></p>
+    <p id="video-error" class="error" role="alert"></p>
+    <div class="row-end"><button type="button" class="btn ghost" data-close="video-dialog"><?= e('Cancel') ?></button><button type="submit" class="btn primary" id="video-submit"><span data-icon="video"></span><?= e('Make the video') ?></button></div>
+  </form>
 </dialog>
 
 <dialog id="job-dialog" class="sheet wide job-sheet" aria-labelledby="job-title">

@@ -37,6 +37,7 @@ jobs:
           node --check assets/comics.js
           node --check assets/pack.js
           node --check assets/vn.js
+          node --check assets/gpu.js
           # The browser loads app.js as a module; checked as one, a name declared twice is an error.
           cp assets/app.js "$RUNNER_TEMP/app.mjs" && node --check "$RUNNER_TEMP/app.mjs"
           node tests/outpaint.mjs
@@ -58,6 +59,7 @@ jobs:
           php tests/catalog.php
           php tests/vn.php
           php tests/albums.php
+          php tests/video_prompt.php
           php tests/i18n.php
       - name: Installation regression checks
         run: |
@@ -69,9 +71,12 @@ jobs:
           test_token="$(openssl rand -hex 24)"
           export TEST_DATA="$test_data" TEST_TOKEN="$test_token"
           php -r 'file_put_contents("config.php", "<?php return " . var_export(["data_dir"=>getenv("TEST_DATA"), "setup_token"=>getenv("TEST_TOKEN"), "require_https"=>false], true) . ";");'
-          php -S 127.0.0.1:8099 -t . > "$RUNNER_TEMP/imagegen-server.log" 2>&1 &
+          PHP_CLI_SERVER_WORKERS=4 php -S 127.0.0.1:8099 -t . > "$RUNNER_TEMP/imagegen-server.log" 2>&1 &
           for attempt in 1 2 3 4 5; do curl -s http://127.0.0.1:8099/ > /dev/null && break; sleep 1; done
           python3 tests/http_checks.py http://127.0.0.1:8099 "$test_data" "$test_token"
+          # Videos on the GPU worker, with its test pattern engine (ffmpeg) instead of a GPU.
+          command -v ffmpeg > /dev/null || sudo apt-get install -y -qq ffmpeg
+          python3 tests/gpu_checks.py http://127.0.0.1:8099 "$test_data" "$test_token"
       - name: Browser integration and visual checks
         if: matrix.php == '8.3'
         env:
@@ -88,3 +93,4 @@ jobs:
           node tests/gemini-browser.mjs
           node tests/vn-browser.mjs
           node tests/language-browser.mjs
+          node tests/gpu-browser.mjs

@@ -16,7 +16,7 @@ $used = [];
 /** Every string literal of the code, for entries looked up from a variable (t($label)). */
 $literals = [];
 
-$php = array_merge(glob("$root/app/*.php"), glob("$root/bin/*.php"), ["$root/index.php", "$root/mcp.php"]);
+$php = array_merge(glob("$root/app/*.php"), glob("$root/bin/*.php"), ["$root/index.php", "$root/mcp.php", "$root/gpu.php"]);
 foreach ($php as $file) {
     $tokens = array_values(array_filter(token_get_all((string)file_get_contents($file)), fn($t) => !is_array($t) || !in_array($t[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)));
     $value = static function (array $t): string {

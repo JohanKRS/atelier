@@ -1834,3 +1834,57 @@ textarea.vn-gameplay-text { min-height: 320px; }
   .vn-tree > .vn-toolbar .vn-problems-toggle > span { display: inline; }
   .vn-table { display: block; overflow-x: auto; }
 }
+
+/* Videos on the GPU worker (gpu.js): the state of the GPU, the window that asks for a video. */
+.gpu-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.gpu-chip.on .gpu-dot, .gpu-line.on .gpu-dot, #gpu-card.on .gpu-dot { background: var(--ok); }
+.gpu-chip.busy .gpu-dot { animation: gpu-pulse 1.4s ease-in-out infinite; }
+@keyframes gpu-pulse { 50% { opacity: .35; } }
+.gpu-now { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.gpu-steps ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 13px; line-height: 1.5; color: var(--text-2); }
+.gpu-steps h4, #settings-gpu h4 { margin: 0; font-size: 13px; }
+.gpu-line { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--panel); color: var(--text-2); font-size: 12.5px; text-align: left; line-height: 1.45; }
+.gpu-line:hover { border-color: var(--line-strong); color: var(--text); }
+.video-sheet .field { display: grid; gap: 6px; }
+.video-sheet .segmented { flex-wrap: wrap; }
+.video-frames { display: flex; flex-wrap: wrap; gap: 10px; }
+.video-frames[hidden] { display: none; }
+.video-frame { position: relative; margin: 0; width: 112px; height: 112px; border-radius: var(--radius-sm); overflow: hidden; border: 1px solid var(--line-strong); background: var(--panel); }
+.video-frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.video-frame figcaption { position: absolute; left: 6px; bottom: 6px; padding: 1px 7px; border-radius: 999px; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; font-weight: 600; }
+.video-frame .icon-btn { position: absolute; top: 4px; right: 4px; background: rgba(0,0,0,.6); color: #fff; }
+.video-frame.empty { display: grid; place-content: center; justify-items: center; gap: 6px; padding: 8px; border-style: dashed; color: var(--muted); font-size: 11.5px; text-align: center; }
+.video-frame.empty:hover { color: var(--text); border-color: var(--accent); }
+.video-prompt textarea { width: 100%; min-height: 130px; }
+.video-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.video-options label[hidden] { display: none; }
+.range-row { display: flex; align-items: center; gap: 10px; }
+.range-row input { flex: 1; }
+.range-row output { min-width: 3.5em; font-variant-numeric: tabular-nums; color: var(--text-2); }
+.pick-duration { position: absolute; right: 7px; bottom: 7px; display: inline-flex; align-items: center; gap: 3px; padding: 1px 7px 1px 5px; border-radius: 999px; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.pick-duration svg.i { width: 11px; height: 11px; fill: currentColor; stroke: none; }
+/* The video window: pinned pictures along the video, references (pictures, videos, sounds), the prompt helper. */
+.video-keys { align-items: flex-start; }
+.video-key { display: grid; justify-items: center; gap: 4px; }
+.video-sheet .video-key-at { display: inline-flex; flex-direction: row; align-items: center; gap: 5px; min-height: 28px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.video-sheet .video-key-at input { width: 64px; min-height: 28px; padding: 3px 6px; font-size: 12.5px; text-align: right; }
+.video-frame.is-video img { filter: saturate(.9); }
+.video-frame-time { position: absolute; right: 6px; bottom: 6px; padding: 1px 6px; border-radius: 999px; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; font-variant-numeric: tabular-nums; }
+.video-sound { display: grid; align-content: start; gap: 6px; width: 180px; min-height: 112px; padding: 8px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); background: var(--panel); font-size: 12px; }
+.video-sound-head { display: flex; align-items: center; gap: 6px; }
+.video-sound-head svg.i { width: 16px; height: 16px; color: var(--accent); }
+.video-sound-head .icon-btn { margin-left: auto; }
+.video-sound-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.video-sheet .video-sound select { min-height: 28px; font-size: 12px; padding: 2px 6px; }
+.video-add, .video-improve { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.video-add .btn[hidden], .video-improve [hidden] { display: none; }
+.video-sheet .video-improve select { min-height: 30px; font-size: 12px; padding: 2px 8px; width: auto; }
+.video-improve .hint { flex: 1 1 220px; margin: 0; }
+.video-sheet .field[hidden] { display: none; }
+.video-sheet .switch[hidden], .video-sheet label[hidden] { display: none; }
+@media (max-width: 560px) {
+  .video-frame { width: 92px; height: 92px; }
+  .video-sound { width: 100%; min-height: 0; }
+}
+/* With Video, the composer has four buttons in a row. */
+.composer .tools { grid-template-columns: repeat(4, minmax(0, 1fr)); }

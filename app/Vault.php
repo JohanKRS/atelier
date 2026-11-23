@@ -53,6 +53,8 @@ final class Vault
                 position REAL NOT NULL, body BLOB NOT NULL, rev INTEGER NOT NULL DEFAULT 1, created INTEGER NOT NULL, updated INTEGER NOT NULL);
               CREATE TABLE IF NOT EXISTS story_inbox (id TEXT PRIMARY KEY, story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE, user_id TEXT NOT NULL,
                 created INTEGER NOT NULL, content BLOB NOT NULL);
+              CREATE TABLE IF NOT EXISTS gpu_workers (user_id TEXT PRIMARY KEY, token_id TEXT UNIQUE, token_key BLOB, created INTEGER, used INTEGER,
+                seen INTEGER, state TEXT, stop INTEGER NOT NULL DEFAULT 0, idle_minutes INTEGER NOT NULL DEFAULT 15);
               CREATE INDEX IF NOT EXISTS story_inbox_story ON story_inbox(story_id, created);
               CREATE INDEX IF NOT EXISTS stories_user ON stories(user_id, updated DESC);
               CREATE INDEX IF NOT EXISTS chapters_story ON chapters(story_id, position);
@@ -65,13 +67,14 @@ final class Vault
               CREATE INDEX IF NOT EXISTS albums_user ON albums(user_id);
               CREATE INDEX IF NOT EXISTS album_items_image ON album_items(image_id);');
             // Columns added after the first release. Phase, preview counters, owners, when a request started and whether its
-            // process holds a lock, the custom order, the chosen cover of each image's versions, whether an item is hidden from
+            // process holds a lock, who runs it (null: this server; gpu: the video worker on a GPU, as in Google Colab) and the
+            // progress that worker reports (steps and its own status line), the custom order, the chosen cover of each image's versions, whether an item is hidden from
             // the library and the stack it was grouped into (a random id), and whether an album's items show in the
             // library hold no user content; the
             // balance settings and the account's preferences (the reader's settings) are sealed like the API key, and a story's
             // character sheets, its comic adaptation (with the adaptation's own bible, plan and sheets) and a visual novel's
             // settings and art like its bible.
-            foreach (['jobs'=>['phase'=>'TEXT', 'preview'=>'INTEGER NOT NULL DEFAULT 0', 'user_id'=>'TEXT', 'started'=>'INTEGER', 'worker_lock'=>'INTEGER NOT NULL DEFAULT 0'], 'images'=>['user_id'=>'TEXT', 'position'=>'REAL', 'cover'=>'INTEGER NOT NULL DEFAULT 0', 'hidden'=>'INTEGER NOT NULL DEFAULT 0', 'stack'=>'TEXT'],
+            foreach (['jobs'=>['phase'=>'TEXT', 'preview'=>'INTEGER NOT NULL DEFAULT 0', 'user_id'=>'TEXT', 'started'=>'INTEGER', 'worker_lock'=>'INTEGER NOT NULL DEFAULT 0', 'runner'=>'TEXT', 'progress'=>'TEXT'], 'images'=>['user_id'=>'TEXT', 'position'=>'REAL', 'cover'=>'INTEGER NOT NULL DEFAULT 0', 'hidden'=>'INTEGER NOT NULL DEFAULT 0', 'stack'=>'TEXT'],
                 'users'=>['billing'=>'BLOB', 'claude_key'=>'BLOB', 'prefs'=>'BLOB', 'gemini_key'=>'BLOB'], 'albums'=>['library'=>'INTEGER NOT NULL DEFAULT 1'], 'stories'=>['cast'=>'BLOB', 'comic'=>'BLOB', 'vn'=>'BLOB', 'vn_art'=>'BLOB', 'comic_notes'=>'BLOB', 'comic_plan'=>'BLOB', 'comic_cast'=>'BLOB']] as $table => $added) {
                 $columns = array_column($this->db->query("PRAGMA table_info($table)")->fetchAll(), 'name');
                 foreach ($added as $column => $type) {
@@ -410,8 +413,9 @@ final class Vault
     /**
      * Turns a complete upload into a library item. $info carries what the browser read from the video (name, duration,
      * dimensions, frame rate); $poster is a frame of it as a data URL. Repeating the call after a lost answer returns the item.
+     * $extra is what a video made on the GPU worker keeps (Gpu): its prompt, sources and request; $album, where it goes.
      */
-    public function finishUpload(string $id, array $info, string $poster, string $key): array
+    public function finishUpload(string $id, array $info, string $poster, string $key, array $extra = [], ?string $album = null): array
     {
         self::validId($id);
         $q = $this->db->prepare('SELECT 1 FROM images WHERE id=? AND user_id=?'); $q->execute([$id, $this->owner()]);
@@ -433,8 +437,10 @@ final class Vault
             'operation'=>'video','label'=>null,'kind'=>'video','mime'=>$type,'size'=>$size,'width'=>(int)$width,'height'=>(int)$height,
             'duration'=>round($duration, 6),'fps'=>$fps === null ? null : round($fps, 6),'frames'=>$frames === null ? null : (int)$frames,
             'poster_mime'=>(string)getimagesizefromstring($posterBytes)['mime']];
+        // A video made on the GPU worker: its prompt, the images it started from, the request and how it was made.
+        $meta = array_merge($meta, array_intersect_key($extra, array_flip(['title','prompt','original_prompt','options','parent_ids','job_id','generated','audio','seed','engine','label','typed'])));
         if (!@rename($part, $this->videoPath($id))) throw new HttpError(503, t('[DATA-WRITE] Could not finish the video in the private folder.'));
-        try { $this->store($id, ['full'=>$posterBytes, 'thumb'=>$this->thumbnail($posterBytes)], $meta, $key); }
+        try { $this->store($id, ['full'=>$posterBytes, 'thumb'=>$this->thumbnail($posterBytes)], $meta, $key, $album); }
         catch (\Throwable $e) { @rename($this->videoPath($id), $part); throw $e; }
         $this->db->prepare('DELETE FROM uploads WHERE id=?')->execute([$id]);
         return $this->video($id, $key);

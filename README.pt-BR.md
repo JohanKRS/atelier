@@ -23,6 +23,7 @@ Descreva o que você quer, escolha o formato e a qualidade, e gere. O Atelier tr
 - **Ajudas de um clique.** Ampliar, expandir a tela, deixar fotorrealista, melhorar, ou limpar ruídos e linhas soltas.
 - **Nada se perde.** Cada edição vira uma versão nova numa árvore. Dá para voltar, comparar com a original ou seguir por outro caminho.
 - **Uma biblioteca onde você acha as coisas.** Álbuns, favoritas, pilhas, imagens ocultas, busca pelo prompt, ordem por tamanho ou formato. Vídeos também: solte um clipe, escolha um frame e edite.
+- **Vídeos com som, na sua própria GPU.** Comece do texto, fixe imagens no primeiro quadro, no último ou em qualquer segundo no meio, traga imagens, vídeos e sons como referência, ou parta de um vídeo: continue, siga o movimento dele ou troque uma parte. Um ajudante reescreve a sua ideia do jeito que o modelo (MiniMax H3) entende melhor. Roda numa GPU alugada por hora, como a do Google Colab: um notebook lá pega os pedidos, manda os vídeos para a sua biblioteca e desliga sozinho quando você para. Veja [Vídeos na GPU](docs/manual.pt-BR.md#fazer-vídeos-na-gpu-google-colab).
 
 ![Um farol e as edições dele, na árvore de versões](docs/screenshots/versions.webp)
 

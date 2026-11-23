@@ -5,10 +5,11 @@ DirectoryIndex index.php
 </FilesMatch>
 <IfModule mod_rewrite.c>
   RewriteEngine On
-  RewriteRule ^(?:app|bin|tests|storage|\.git|\.github)(?:/|$) - [F,L]
-  # MCP clients authenticate with "Authorization: Bearer"; CGI/FastCGI setups drop that header unless it is passed on.
+  RewriteRule ^(?:app|bin|colab|tests|storage|\.git|\.github)(?:/|$) - [F,L]
+  # MCP clients and the video worker authenticate with "Authorization: Bearer"; CGI/FastCGI setups drop that header
+  # unless it is passed on.
   RewriteCond %{HTTP:Authorization} .
-  RewriteRule ^mcp\.php$ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+  RewriteRule ^(mcp|gpu)\.php$ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 </IfModule>
 <IfModule mod_headers.c>
   Header always set X-Robots-Tag "noindex, nofollow, noarchive, noimageindex"
