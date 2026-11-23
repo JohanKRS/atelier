@@ -86,7 +86,7 @@ try{
     check($made['parent_ids']===[$picture['id'],$video['id']],'the library pictures and videos it came from are its parents');
     $row=$vault->db->prepare('SELECT length(payload) FROM jobs WHERE id=?');$row->execute([$id]);
     check((int)$row->fetchColumn()<20000,'the sound goes to the private file of the request, not to its row');
-    $claimed=$jobs->claimVideo(['h3'],$key);
+    $claimed=$jobs->claimGpu(['h3'],$key);
     $kinds=array_column($claimed['inputs'],'kind');
     check($claimed['id']===$id&&$kinds===['image','image','image','video','audio'],'the worker gets every input in order');
     check(str_starts_with($claimed['inputs'][0]['data'],'data:image/')&&str_starts_with($claimed['inputs'][4]['data'],'data:audio/mpeg')&&$claimed['inputs'][4]['at']===1.5,'pictures and sounds come as data, with their moments');

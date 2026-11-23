@@ -1,11 +1,12 @@
 <?php
 declare(strict_types=1);
-// The video worker's endpoint (Gpu): a notebook on a GPU, such as Google Colab, takes the account's video requests from
-// here and sends the videos back. Every call is short, so no web server limit gets in the way, and the worker never needs
-// an address of its own. Authenticated by the account's worker token, never by cookies:
+// The GPU worker's endpoint (Gpu): a notebook on a GPU, such as Google Colab, takes the account's video and picture
+// requests from here and sends the results back. Every call is short, so no web server limit gets in the way, and the
+// worker never needs an address of its own. Authenticated by the account's worker token, never by cookies:
 //   POST gpu.php?action=hello|pulse|claim|progress|upload|finish|fail|bye   Authorization: Bearer <token>, JSON body
-//   POST gpu.php?action=chunk&job=<id>&upload=<id>&offset=<n>                a piece of the video, raw bytes
+//   POST gpu.php?action=chunk&job=<id>&upload=<id>&offset=<n>                a piece of the video or picture, raw bytes
 //   POST gpu.php?action=media&job=<id>&index=<n>&offset=<n>                  a piece of a video the request starts from
+//   POST gpu.php?action=input&job=<id>&index=<n|mask>                        a picture a picture request sends
 //   POST gpu.php?action=worker                                               the worker's code, as this server has it
 require __DIR__.'/app/bootstrap.php';
 use Studio\{Vault,Jobs,Gpu,HttpError};
@@ -30,7 +31,7 @@ try {
     if (!$resolved) {
         $vault->throttle('gpu:'.($_SERVER['REMOTE_ADDR']??''),30,900);
         header('WWW-Authenticate: Bearer realm="Atelier"');
-        throw new HttpError(401,$token==='' ? t('Missing worker token.') : t('Invalid or revoked worker token. Make a new one in Atelier, Settings › Video (GPU).'));
+        throw new HttpError(401,$token==='' ? t('Missing worker token.') : t('Invalid or revoked worker token. Make a new one in Atelier, Settings › GPU.'));
     }
     [$user,$key]=$resolved;
     $vault->useOwner($user['id']);
@@ -58,6 +59,14 @@ try {
         catch (Throwable $e) { Studio\logFailure($e); }
         exit;
     }
+    // A picture a request sends (the one it changes, a reference, the painted area), whole: tens of MB at most.
+    if ($action==='input') {
+        $picture=$jobs->inputPicture((string)($_GET['job']??''),(string)($_GET['index']??''),$key);
+        @ini_set('zlib.output_compression','0');
+        while (ob_get_level()>0 && @ob_end_clean());
+        header('Content-Type: '.$picture['mime']); header('Content-Length: '.strlen($picture['bytes'])); header('Cache-Control: no-store');
+        echo $picture['bytes']; exit;
+    }
     $input=$action==='chunk' ? [] : Studio\input();
     // Every call also says how the worker is, so the page knows it is on and what it does.
     $directives=is_array($input['state']??null) ? $gpu->heartbeat($input['state']) : null;
@@ -65,7 +74,7 @@ try {
     if ($action==='hello') {
         $piece=Studio\videoPieceBytes(ini_get('post_max_size'));
         Studio\json(['account'=>(string)$user['name'],'piece'=>$piece,'max_video_bytes'=>$config['max_video_mb']*1048576,
-            'engines'=>array_keys(Gpu::engines())]+($directives??$gpu->heartbeat(['phase'=>'setup'])));
+            'engines'=>Gpu::workerEngines(),'queued'=>$jobs->queuedEngines($key),'recent'=>$jobs->recentEngine($key)]+($directives??$gpu->heartbeat(['phase'=>'setup'])));
     }
     if ($action==='claim') {
         // Waits up to 20 s for a request, so a new one starts at once without the worker calling every second.
@@ -75,9 +84,9 @@ try {
         $first=true;
         do {
             // A token revoked (or replaced) while this call waits takes no request: its notebook turns off instead.
-            if (!$first && !$gpu->resolveToken($token)) throw new HttpError(401,t('Invalid or revoked worker token. Make a new one in Atelier, Settings › Video (GPU).'));
+            if (!$first && !$gpu->resolveToken($token)) throw new HttpError(401,t('Invalid or revoked worker token. Make a new one in Atelier, Settings › GPU.'));
             $first=false;
-            $job=$jobs->claimVideo($engines,$key);
+            $job=$jobs->claimGpu($engines,$key);
             if ($job!==null) break;
             $directives=$gpu->directives();
             if ($directives['stop'] || microtime(true)>=$until || connection_aborted()) break;
@@ -106,7 +115,7 @@ try {
         Studio\json(['received'=>$vault->appendUpload($upload,$offset,$data,$key)]);
     }
     if ($action==='finish') {
-        $info=array_intersect_key($input,array_flip(['width','height','duration','fps','frames','audio','seed','took','gpu']));
+        $info=array_intersect_key($input,array_flip(['width','height','duration','fps','frames','audio','seed','took','gpu','planned_prompt']));
         Studio\json(['job'=>$jobs->finishVideo((string)($input['job']??''),(string)($input['upload']??''),$info,(string)($input['poster']??''),$key)]);
     }
     if ($action==='fail') Studio\json(['job'=>$jobs->failVideo((string)($input['job']??''),(string)($input['error']??''),($input['cancelled']??false)===true,$key)]);

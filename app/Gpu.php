@@ -22,7 +22,7 @@ final class Gpu
     /** Seconds a running video may go without a sign of life before it counts as interrupted (the runtime went away). */
     public const STALE = 180;
     /** The notebook, opened in Colab straight from the public repository. */
-    public const NOTEBOOK = 'https://colab.research.google.com/github/JohanKRS/atelier/blob/main/colab/atelier_video.ipynb';
+    public const NOTEBOOK = 'https://colab.research.google.com/github/JohanKRS/atelier/blob/main/colab/atelier_gpu.ipynb';
     public const IDLE_CHOICES = [5, 10, 15, 20, 30, 45, 60];
     private const TOKEN = '/\Aigv_([a-f0-9]{24})_([A-Za-z0-9_-]{43})\z/D';
 
@@ -51,6 +51,21 @@ final class Gpu
     }
 
     public static function engine(string $id): ?array { return self::engines()[$id] ?? null; }
+
+    /**
+     * The image models the worker can run (GpuImages has what the page and the requests know of them). download_gb: what
+     * the first picture of a session downloads; planner_gb: the prompt expander, the first time planning is on.
+     */
+    public static function imageEngines(): array
+    {
+        return [
+            'h3-image'=>['label'=>'MiniMax H3-Image', 'download_gb'=>47, 'planner_gb'=>6.8,
+                'license'=>t('MiniMax-H3-Image Community License: its use is not allowed in the United States, the European Union, the United Kingdom or South Korea, and offering it to other people as a service needs MiniMax\'s authorization.')],
+        ];
+    }
+
+    /** Every model the worker may say it runs: the video ones and the image ones. */
+    public static function workerEngines(): array { return array_merge(array_keys(self::engines()), array_keys(self::imageEngines())); }
 
     public static function defaultEngine(): string { return array_key_first(self::engines()); }
 
@@ -133,6 +148,13 @@ final class Gpu
         return 'igv_'.$lookup.'_'.sodium_bin2base64($secret, SODIUM_BASE64_VARIANT_URLSAFE_NO_PADDING);
     }
 
+    /** Whether the account has a worker token: without one, no GPU will ever take its requests. */
+    public function hasToken(): bool
+    {
+        $row = $this->row();
+        return $row !== null && $row['token_id'] !== null;
+    }
+
     /** The token stops working at once; a worker that is on finds out on its next call and turns off. */
     public function revokeToken(string $userId): void
     {
@@ -175,7 +197,7 @@ final class Gpu
         $idle = (int)($row['idle_minutes'] ?? 15);
         $worker = null;
         if ($alive) {
-            $worker = array_intersect_key($state, array_flip(['gpu','vram','phase','message','started','idle_since','engines','loaded','version','progress']));
+            $worker = array_intersect_key($state, array_flip(['gpu','vram','phase','message','started','idle_since','engines','loaded','version','progress','making']));
             $worker['seen'] = (int)$row['seen'];
             // When it turns itself off if no request comes, by the idle minutes it was last told.
             $worker['off_at'] = is_int($state['idle_since'] ?? null) ? $state['idle_since'] + $idle * 60 : null;
@@ -186,7 +208,7 @@ final class Gpu
         return ['token'=>$row !== null && $row['token_id'] !== null ? ['created'=>(int)$row['created'], 'used'=>$row['used'] === null ? null : (int)$row['used']] : null,
             'worker'=>$worker, 'idle_minutes'=>$idle, 'idle_choices'=>self::IDLE_CHOICES, 'queued'=>(int)($counts['queued'] ?? 0),
             'running'=>(int)($counts['running'] ?? 0) + (int)($counts['cancelling'] ?? 0), 'notebook'=>(string)($this->config['video_notebook'] ?? self::NOTEBOOK),
-            'engines'=>self::engines(), 'now'=>$now];
+            'engines'=>self::engines(), 'image_engines'=>self::imageEngines(), 'now'=>$now];
     }
 
     public function setIdleMinutes(int $minutes): void
@@ -216,6 +238,118 @@ final class Gpu
     }
 
     // -------------------------------------------------------------------------------------------------------------
+    // LoRAs: the account's list of small add-on files for the GPU's image models (a style, a character, a technique),
+    // each with a link the worker downloads it from the first time a session uses it. Kept sealed with the account key.
+    // -------------------------------------------------------------------------------------------------------------
+
+    public const MAX_LORAS = 60;
+
+    /** @return list<array{id:string,name:string,url:string,trigger:string,strength:float,engine:string,added:int}> */
+    public function loras(string $key): array
+    {
+        $row = $this->row(); $sealed = $row['loras'] ?? null;
+        if (!is_string($sealed) || $sealed === '') return [];
+        try { $list = json_decode(Crypto::open($sealed, $key, 'gpu:loras:'.$this->vault->owner()), true, 16, JSON_THROW_ON_ERROR); }
+        catch (\Throwable $e) { logFailure($e); return []; }
+        return is_array($list) ? array_values(array_filter($list, 'is_array')) : [];
+    }
+
+    /** Adds a LoRA to the list, or changes the one with this id. Returns the list. */
+    public function saveLora(array $input, string $key): array
+    {
+        $name = trim(preg_replace('/\s+/u', ' ', (string)($input['name'] ?? '')) ?? '');
+        $trigger = trim(preg_replace('/\s+/u', ' ', (string)($input['trigger'] ?? '')) ?? '');
+        $url = self::loraUrl((string)($input['url'] ?? ''));
+        $strength = filter_var($input['strength'] ?? 1, FILTER_VALIDATE_FLOAT);
+        if ($strength === false || $strength < GpuImages::LORA_STRENGTH[0] || $strength > GpuImages::LORA_STRENGTH[1])
+            throw new HttpError(422, t('Choose a LoRA strength from {min} to {max}.', ['min'=>GpuImages::LORA_STRENGTH[0], 'max'=>GpuImages::LORA_STRENGTH[1]]));
+        $engine = (string)($input['engine'] ?? 'h3-image');
+        if (!isset(self::imageEngines()[$engine])) throw new HttpError(422, t('Choose the model the LoRA was made for.'));
+        if ($name === '') $name = self::nameFromUrl($url);
+        $list = $this->loras($key);
+        $id = is_string($input['id'] ?? null) && $input['id'] !== '' ? $input['id'] : null;
+        if ($id !== null && !preg_match('/\A[a-f0-9]{16}\z/D', $id)) throw new HttpError(422, t('Invalid LoRA.'));
+        $entry = ['id'=>$id ?? bin2hex(random_bytes(8)), 'name'=>mb_substr($name, 0, 80), 'url'=>$url, 'trigger'=>mb_substr($trigger, 0, 200),
+            'strength'=>round((float)$strength, 2), 'engine'=>$engine, 'added'=>time()];
+        $found = false;
+        foreach ($list as $n => $l) if (($l['id'] ?? null) === $entry['id']) { $list[$n] = ['added'=>$l['added'] ?? time()] + $entry; $found = true; }
+        if ($id !== null && !$found) throw new HttpError(404, t('This LoRA is no longer in your list.'));
+        if (!$found) {
+            if (count($list) >= self::MAX_LORAS) throw new HttpError(422, t('Keep up to {n} LoRAs in the list.', ['n'=>self::MAX_LORAS]));
+            $list[] = $entry;
+        }
+        $this->storeLoras($list, $key);
+        return $list;
+    }
+
+    public function deleteLora(string $id, string $key): array
+    {
+        $list = array_values(array_filter($this->loras($key), fn($l) => ($l['id'] ?? null) !== $id));
+        $this->storeLoras($list, $key);
+        return $list;
+    }
+
+    private function storeLoras(array $list, string $key): void
+    {
+        $this->ensureRow();
+        $sealed = Crypto::seal(json_encode(array_values($list), JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES), $key, 'gpu:loras:'.$this->vault->owner());
+        $this->vault->db->prepare('UPDATE gpu_workers SET loras=CAST(? AS BLOB) WHERE user_id=?')->execute([$sealed, $this->vault->owner()]);
+    }
+
+    /**
+     * The LoRAs a request chose ($chosen: id and strength), with what the worker needs of each: its name, link and
+     * trigger words. One the list no longer has keeps what the request had ($before, when it is repeated).
+     * @return list<array{id:string,name:string,url:string,trigger:string,strength:float}>
+     */
+    public function resolveLoras(array $chosen, string $engine, string $key, array $before = []): array
+    {
+        if (!$chosen) return [];
+        $list = array_column($this->loras($key), null, 'id'); $old = array_column(array_filter($before, 'is_array'), null, 'id');
+        $out = [];
+        foreach ($chosen as $c) {
+            $l = $list[$c['id']] ?? $old[$c['id']] ?? null;
+            if ($l === null || !is_string($l['url'] ?? null)) throw new HttpError(422, t('A LoRA of this request is no longer in your list (Settings › GPU).'));
+            if (($l['engine'] ?? 'h3-image') !== $engine) throw new HttpError(422, t('The LoRA {name} is for another model.', ['name'=>$l['name'] ?? '']));
+            $out[] = ['id'=>$c['id'], 'name'=>(string)($l['name'] ?? ''), 'url'=>(string)$l['url'], 'trigger'=>(string)($l['trigger'] ?? ''), 'strength'=>(float)$c['strength']];
+        }
+        return $out;
+    }
+
+    /**
+     * A LoRA's link as the worker downloads it: https only; a Hugging Face file page becomes its download link, and a
+     * Civitai page with its version (?modelVersionId=) the version's download link.
+     */
+    public static function loraUrl(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '' || mb_strlen($url) > 1000 || !preg_match('~\Ahttps://[^\s/?#@]+(?:[/?#]\S*)?\z~i', $url) || !filter_var($url, FILTER_VALIDATE_URL))
+            throw new HttpError(422, t('Paste the LoRA\'s link: an https address of a .safetensors file on Hugging Face or Civitai.'));
+        $host = strtolower((string)parse_url($url, PHP_URL_HOST));
+        if (in_array($host, ['huggingface.co', 'www.huggingface.co', 'hf.co'], true)) {
+            $url = preg_replace('#\Ahttps://(?:www\.)?(?:huggingface\.co|hf\.co)/#i', 'https://huggingface.co/', $url);
+            $url = preg_replace('#\A(https://huggingface\.co/(?:[^/]+/){1,2})blob/#', '$1resolve/', $url);
+            $path = (string)parse_url($url, PHP_URL_PATH);
+            if (!str_contains($path, '/resolve/') || !preg_match('/\.safetensors\z/i', $path))
+                throw new HttpError(422, t('On Hugging Face, use the link of the .safetensors file itself (open the file and copy the address).'));
+        } elseif (in_array($host, ['civitai.com', 'www.civitai.com', 'civitai.green', 'www.civitai.green'], true)) {
+            $path = (string)parse_url($url, PHP_URL_PATH);
+            parse_str((string)parse_url($url, PHP_URL_QUERY), $query);
+            if (preg_match('#\A/api/download/models/(\d+)#', $path, $m)) $url = 'https://civitai.com/api/download/models/'.$m[1];
+            elseif (preg_match('#\A/models/\d+#', $path) && preg_match('/\A\d+\z/', (string)($query['modelVersionId'] ?? ''))) $url = 'https://civitai.com/api/download/models/'.$query['modelVersionId'];
+            else throw new HttpError(422, t('On Civitai, choose the version and copy the link of its Download button, or the page\'s address with ?modelVersionId= in it.'));
+        }
+        return $url;
+    }
+
+    /** A name from a link: its file name, without the extension. */
+    private static function nameFromUrl(string $url): string
+    {
+        $base = basename((string)parse_url($url, PHP_URL_PATH));
+        $name = trim(preg_replace('/\.safetensors\z/i', '', rawurldecode($base)) ?? '');
+        return $name === '' || ctype_digit($name) ? 'LoRA' : mb_substr(str_replace(['_', '-'], ' ', $name), 0, 80);
+    }
+
+    // -------------------------------------------------------------------------------------------------------------
     // Calls from the worker
     // -------------------------------------------------------------------------------------------------------------
 
@@ -227,10 +361,10 @@ final class Gpu
     public function heartbeat(array $state): array
     {
         $clean = [];
-        foreach (['gpu'=>120, 'phase'=>20, 'message'=>300, 'version'=>40, 'loaded'=>40] as $name=>$max)
+        foreach (['gpu'=>120, 'phase'=>20, 'message'=>300, 'version'=>40, 'loaded'=>40, 'making'=>10] as $name=>$max)
             if (is_string($state[$name] ?? null)) $clean[$name] = mb_substr(trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $state[$name]) ?? ''), 0, $max);
         foreach (['vram', 'started', 'idle_since'] as $name) if (is_int($state[$name] ?? null) && $state[$name] >= 0) $clean[$name] = $state[$name];
-        if (is_array($state['engines'] ?? null)) $clean['engines'] = array_values(array_filter($state['engines'], fn($e) => is_string($e) && self::engine($e) !== null));
+        if (is_array($state['engines'] ?? null)) $clean['engines'] = array_values(array_filter($state['engines'], fn($e) => is_string($e) && in_array($e, self::workerEngines(), true)));
         if (is_array($state['progress'] ?? null)) $clean['progress'] = array_intersect_key(array_filter($state['progress'], fn($v) => is_int($v) || is_float($v)), array_flip(['done','total']));
         $clean['phase'] ??= 'ready';
         $this->ensureRow();

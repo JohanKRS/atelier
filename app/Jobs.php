@@ -82,7 +82,8 @@ final class Jobs
 
         $refs = $input['references'] ?? [];
         // GPT Image reads 16 images; Nano Banana 14, the copy that marks a painted area among them.
-        $most = Images::maxImages($options['model']) - (!empty($input['mask']) && Images::provider($options['model']) === 'gemini' ? 1 : 0);
+        $provider = Images::provider($options['model']);
+        $most = Images::maxImages($options['model']) - (!empty($input['mask']) && in_array($provider, ['gemini','gpu'], true) ? 1 : 0);
         if (!is_array($refs) || count($refs) > $most) {
             $model = Images::model($options['model'])['label'];
             throw new HttpError(422, $most >= 16 ? t('Use up to {most} references.', ['most'=>$most])
@@ -119,8 +120,11 @@ final class Jobs
         // blur to be undone would only make the new part sharper than the rest.
         if ($mask !== null || $operation === 'expand') $cleaned = null;
         Images::requireKey($this->vault, $key, $options['model']);
+        // An open model on the GPU worker: the request waits in line for it, with what each LoRA chosen is.
+        if ($provider === 'gpu') $options['loras'] = (new Gpu($this->vault, $this->config))->resolveLoras($options['loras'], $options['engine'], $key);
         $payload = ['prompt'=>$prompt,'options'=>$options,'references'=>$references,'parent_ids'=>array_values(array_unique($parents)),'mask'=>$mask,
             'parent_id'=>$parent,'operation'=>$operation,'label'=>$label,'image_ids'=>[],'error'=>null];
+        if ($provider === 'gpu') $payload['kind'] = 'image';
         if ($lines !== null) $payload['lines'] = $lines;
         // The images also go into this album when they are saved (a story's illustrations go into the story's album).
         if (isset($input['album'])) { Vault::validId((string)$input['album']); if ($this->vault->hasAlbum((string)$input['album'])) $payload['album'] = (string)$input['album']; }
@@ -131,7 +135,7 @@ final class Jobs
             if (!is_string($input['typed'])) throw new HttpError(422, t('Invalid typed text.'));
             $payload['typed'] = mb_substr(trim($input['typed']), 0, 32000);
         }
-        return $this->insertEach($id, $payload, $key);
+        return $this->insertEach($id, $payload, $key, $provider === 'gpu' ? 'gpu' : null);
     }
 
     /** The Limpar level of a library image that is itself a Limpar version, else null. */
@@ -181,7 +185,7 @@ final class Jobs
      * and each can stream previews.
      * @return list<array>
      */
-    private function insertEach(string $id, array $payload, string $key): array
+    private function insertEach(string $id, array $payload, string $key, ?string $runner = null): array
     {
         $count = (int)$payload['options']['n'];
         $payload['options']['n'] = 1;
@@ -195,6 +199,10 @@ final class Jobs
         // repeated from a set keeps knowing that.
         if ($count > 1) $payload['batch_of'] = $count;
         $ids = self::batchIds($id, $count);
+        // The GPU worker takes each image on its own, with nothing of this server's in between: a varied batch is planned
+        // now, once (only a new batch: a repeated one finds its requests).
+        $directions = null; $planned = null;
+        if ($vary && $runner !== null && !$this->find($ids[0], $key)) [$directions, $planned] = $this->planVariations($payload, $count, $ids[0], $key);
         // The images it sends go once into a file of the batch's first request; a repeated request keeps the file of the
         // one it repeats.
         $fresh = self::carriesInputs($payload) && !isset($payload['inputs']);
@@ -202,8 +210,13 @@ final class Jobs
         $inserted = [];
         foreach ($ids as $k => $jobId) {
             if ($lines !== null) $payload['variation'] = ['index'=>$k + 1, 'count'=>$count, 'label'=>$lines[$k], 'direction'=>'Direction for this image: '.$lines[$k], 'planned'=>false, 'written'=>true];
+            elseif ($vary && $runner !== null) {
+                $payload['variation'] = ['index'=>$k + 1, 'count'=>$count];
+                $payload = $this->withDirection($payload, $directions[$k] ?? null);
+                if ($k === 0 && $planned !== null) $payload['variation_usage'] = $planned; else unset($payload['variation_usage']);
+            }
             elseif ($vary) $payload['variation'] = ['index'=>$k + 1, 'count'=>$count, 'batch'=>$id];
-            if ($this->insert($jobId, $payload, $key)) $inserted[] = $jobId;
+            if ($this->insert($jobId, $payload, $key, $runner)) $inserted[] = $jobId;
         }
         // Written only for a first request that is new here: an id already taken (by another account) is never touched.
         if ($fresh && in_array($ids[0], $inserted, true)) {
@@ -219,6 +232,25 @@ final class Jobs
         return $jobs;
     }
 
+    /**
+     * The directions of a varied batch for the GPU worker, planned right away by the text model of the account's image
+     * key (OpenAI's, else Gemini's), and paid apart as the planning of a batch is. Null directions (no key, or the
+     * planning failed): each image takes a fixed one.
+     * @return array{0:?list<string>,1:?array} the directions and the planning's usage
+     */
+    private function planVariations(array $p, int $count, string $first, string $key): array
+    {
+        $planner = $this->vault->apiKey($key) !== '' ? new OpenAI($this->vault->apiKey($key), 75)
+            : ($this->vault->geminiKey($key) !== '' ? new GeminiImages($this->vault->geminiKey($key), 75) : null);
+        if ($planner === null) return [null, null];
+        if (function_exists('set_time_limit')) @set_time_limit(150);
+        $result = null;
+        try { $result = $planner->planVariations($p['prompt'], $p['references'] ?? [], $count, ($p['operation'] ?? 'generate') === 'edit'); }
+        catch (\Throwable $e) { error_log('Atelier: variation planning for the GPU failed ('.($e instanceof HttpError ? 'HTTP '.$e->status : get_class($e)).')'); }
+        try { if ($planner->paidCount()) $this->vault->recordSpend($first, $planner->paid(), $key); } catch (\Throwable $e) { logFailure($e); }
+        return [$result['variations'] ?? null, $result['usage'] ?? null];
+    }
+
     /** Queue a new request with the same inputs as an earlier one (references included). */
     /** @return list<array> one job per requested image */
     /** $album: the album the new images go into instead of the first request's (a comic page asked before the comic had one). */
@@ -227,7 +259,8 @@ final class Jobs
         Vault::validId($id); Vault::validId($from);
         $source = $this->find($from, $key); if (!$source) throw new HttpError(404, t('Request not found.'));
         $source = $this->withInputs($source, $key);
-        if ($source['runner'] !== null) {
+        $gpu = $source['runner'] !== null;
+        if ($gpu && ($source['payload']['kind'] ?? 'video') === 'video') {
             $existing = $this->batch($id, 1, $key); if ($existing) return $existing;
             $p = $source['payload'];
             [$p['options']] = Gpu::options($p['options'], array_map(fn($m) => array_intersect_key($m, array_flip(['kind','role','at'])), $p['media'] ?? []));
@@ -239,14 +272,16 @@ final class Jobs
         $count = $n === null ? (int)($source['payload']['options']['n'] ?? 1) : (int)(filter_var($n, FILTER_VALIDATE_INT) ?: 1);
         $existing = $this->batch($id, $count, $key); if ($existing) return $existing;
         $p = $source['payload'];
+        $before = $p['options']['loras'] ?? [];
         $p['options'] = Images::options($n === null ? $p['options'] : array_merge($p['options'], ['n'=>$n]));
         Images::requireKey($this->vault, $key, $p['options']['model']);
+        if ($gpu) $p['options']['loras'] = (new Gpu($this->vault, $this->config))->resolveLoras($p['options']['loras'], $p['options']['engine'], $key, is_array($before) ? $before : []);
         if (!empty($p['parent_id'])) {
             try { $this->vault->image((string)$p['parent_id'], $key, true); } catch (HttpError) { $p['parent_id'] = null; $p['operation'] = 'generate'; }
         }
-        $p['image_ids'] = []; $p['error'] = null; $p['variation_usage'] = null; unset($p['dismissed'], $p['error_kind']);
+        $p['image_ids'] = []; $p['error'] = null; $p['variation_usage'] = null; unset($p['dismissed'], $p['error_kind'], $p['upload'], $p['made'], $p['sent_prompt']);
         if ($album !== null) { Vault::validId($album); $p['album'] = $album; }
-        return $this->insertEach($id, $p, $key);
+        return $this->insertEach($id, $p, $key, $gpu ? 'gpu' : null);
     }
 
     /** True when the request is new (false: the id was already taken). */
@@ -358,9 +393,9 @@ final class Jobs
             'variation'=>self::variationInfo($p),'watched'=>!empty($r['worker_lock']),'cleaned'=>self::cleanedOf($p),
             'typed'=>is_string($p['typed'] ?? null) ? $p['typed'] : null]
             + ['album'=>$album, 'apart'=>$album !== null && ($this->apart[$album] ??= $this->vault->keepsApart($album))]
-            // A video for the GPU worker: what it reports while making it (steps done, its own line about what it does).
+            // A video or picture for the GPU worker: what it reports while making it (steps done, its own line about what it does).
             // Its inputs without their data: kind, role, moment, library id (pictures and videos) and a sound's name.
-            + (($r['runner'] ?? null) !== null ? ['runner'=>$r['runner'], 'kind'=>'video', 'roles'=>$p['roles'] ?? [],
+            + (($r['runner'] ?? null) !== null ? ['runner'=>$r['runner'], 'kind'=>$p['kind'] ?? 'video', 'roles'=>$p['roles'] ?? [],
                 'inputs'=>array_map(fn($m) => array_intersect_key($m, array_flip(['kind','role','at','id','name','duration'])), $p['media'] ?? []),
                 'progress'=>is_string($r['progress'] ?? null) ? json_decode($r['progress'], true) : null, 'made'=>$p['made'] ?? null] : []);
     }
@@ -370,7 +405,9 @@ final class Jobs
     private static function errorFor(array $r): ?string
     {
         if ($r['status'] === 'uncertain' && empty($r['payload']['error']) && ($r['runner'] ?? null) !== null)
-            return t('The GPU stopped answering while it made this video: its runtime was probably turned off or disconnected (in Colab Pro, keep the notebook\'s tab open). Make it again when the GPU is on.');
+            return ($r['payload']['kind'] ?? 'video') === 'image'
+                ? t('The GPU stopped answering while it made this picture: its runtime was probably turned off or disconnected (in Colab Pro, keep the notebook\'s tab open). Make it again when the GPU is on.')
+                : t('The GPU stopped answering while it made this video: its runtime was probably turned off or disconnected (in Colab Pro, keep the notebook\'s tab open). Make it again when the GPU is on.');
         if ($r['status'] === 'uncertain' && empty($r['payload']['error'])) {
             // How long the process ran until its last sign of life, and what it was doing: a host limit stops it at
             // about the same time every time.
@@ -900,8 +937,8 @@ final class Jobs
         return ['data'=>$url, 'name'=>mb_substr($name, 0, 120)];
     }
 
-    /** A video request the worker is making (or was, when it went silent), or a 409 the worker reads as "drop it". */
-    private function videoJob(string $id, string $key, array $statuses = ['running','cancelling','uncertain']): array
+    /** A request the GPU worker is making (or was, when it went silent), or a 409 the worker reads as "drop it". */
+    private function gpuJob(string $id, string $key, array $statuses = ['running','cancelling','uncertain']): array
     {
         Vault::validId($id); $job = $this->find($id, $key);
         if (!$job || $job['runner'] === null) throw new HttpError(404, t('Request not found.'));
@@ -912,16 +949,52 @@ final class Jobs
     /** A video of a request the worker is making ($index: its place in the request's list), to send it to the worker. */
     public function videoMedia(string $id, int $index, string $key): array
     {
-        $m = $this->videoJob($id, $key, ['running','uncertain'])['payload']['media'][$index] ?? null;
+        $m = $this->gpuJob($id, $key, ['running','uncertain'])['payload']['media'][$index] ?? null;
         if (!is_array($m) || $m['kind'] !== 'video') throw new HttpError(404, t('Video not found.'));
         return $this->vault->video((string)$m['id'], $key);
     }
 
+    /** The models of the account's requests waiting for the GPU, so the worker downloads what they need first. */
+    public function queuedEngines(string $key): array
+    {
+        $q = $this->vault->db->prepare("SELECT id FROM jobs WHERE user_id=? AND runner='gpu' AND status='queued' ORDER BY created, rowid LIMIT 20");
+        $q->execute([$this->vault->owner()]); $engines = [];
+        foreach ($q->fetchAll(\PDO::FETCH_COLUMN) as $id) {
+            $engine = $this->find((string)$id, $key)['payload']['options']['engine'] ?? null;
+            if (is_string($engine) && !in_array($engine, $engines, true)) $engines[] = $engine;
+        }
+        return $engines;
+    }
+
+    /** The model of the account's latest request on the GPU: what a worker that starts with nothing waiting loads first. */
+    public function recentEngine(string $key): ?string
+    {
+        $q = $this->vault->db->prepare("SELECT id FROM jobs WHERE user_id=? AND runner='gpu' ORDER BY created DESC, rowid DESC LIMIT 1");
+        $q->execute([$this->vault->owner()]); $id = $q->fetchColumn();
+        $engine = $id === false ? null : ($this->find((string)$id, $key)['payload']['options']['engine'] ?? null);
+        return is_string($engine) ? $engine : null;
+    }
+
     /**
-     * The oldest video request of the account that the worker can make ($engines: the models it runs; none: any), taken
-     * for it, with the prompt and the pictures. Null when there is none.
+     * A picture a request sends (its place in the list, or 'mask' for the painted area), for the worker making it: the
+     * claim only says how many there are, since a picture can weigh tens of megabytes.
+     * @return array{mime:string,bytes:string}
      */
-    public function claimVideo(array $engines, string $key): ?array
+    public function inputPicture(string $id, string $index, string $key): array
+    {
+        $job = $this->gpuJob($id, $key, ['running','uncertain']);
+        if (($job['payload']['kind'] ?? 'video') !== 'image') throw new HttpError(404, t('Image not found.'));
+        $p = $this->withInputs($job, $key)['payload'];
+        $url = $index === 'mask' ? ($p['mask'] ?? null) : (ctype_digit($index) ? ($p['references'][(int)$index] ?? null) : null);
+        if (!is_string($url) || !preg_match('#\Adata:(image/(?:png|jpeg|webp));base64,(.+)\z#s', $url, $m)) throw new HttpError(404, t('Image not found.'));
+        return ['mime'=>$m[1], 'bytes'=>(string)base64_decode($m[2], true)];
+    }
+
+    /**
+     * The oldest request of the account that the worker can make ($engines: the models it runs; none: any), a video or
+     * a picture, taken for it with the prompt and what it starts from. Null when there is none.
+     */
+    public function claimGpu(array $engines, string $key): ?array
     {
         $this->markStale();
         $q = $this->vault->db->prepare("SELECT id FROM jobs WHERE user_id=? AND runner='gpu' AND status='queued' ORDER BY created, rowid LIMIT 20");
@@ -935,6 +1008,14 @@ final class Jobs
             try { $job = $this->withInputs($job, $key); }
             catch (HttpError $e) { $this->endVideo((string)$id, $job['payload'], 'failed', $e->getMessage(), $key); continue; }
             $p = $job['payload'];
+            // A picture: the prompt as the model reads it (kept for the details) and how many pictures to fetch.
+            if (($p['kind'] ?? 'video') === 'image') {
+                $prompt = GpuImages::prompt($p);
+                $p['sent_prompt'] = $prompt; $this->savePayload((string)$id, $p, $key);
+                return ['id'=>(string)$id, 'kind'=>'image', 'prompt'=>$prompt, 'plan'=>GpuImages::planParts($p), 'operation'=>$p['operation'] ?? 'generate',
+                    'options'=>['megapixels'=>GpuImages::megapixels($p['options'])] + $p['options'], 'images'=>count($p['references'] ?? []), 'mask'=>!empty($p['mask']),
+                    'created'=>(int)$job['created']];
+            }
             // Pictures and sounds go as data URLs; a video goes as its place in the list and its size, for videoMedia.
             $inputs = [];
             foreach ($p['media'] ?? [] as $n => $m) {
@@ -948,7 +1029,7 @@ final class Jobs
                 }
                 $inputs[] = $entry;
             }
-            return ['id'=>(string)$id, 'prompt'=>$p['prompt'], 'options'=>$p['options'], 'inputs'=>$inputs, 'created'=>(int)$job['created']];
+            return ['id'=>(string)$id, 'kind'=>'video', 'prompt'=>$p['prompt'], 'options'=>$p['options'], 'inputs'=>$inputs, 'created'=>(int)$job['created']];
         }
         return null;
     }
@@ -959,7 +1040,7 @@ final class Jobs
      */
     public function videoProgress(string $id, array $report, string $key): bool
     {
-        $this->videoJob($id, $key);
+        $this->gpuJob($id, $key);
         $phase = preg_replace('/[^a-z-]/', '', (string)($report['phase'] ?? '')) ?: 'generating';
         $progress = ['message'=>mb_substr(trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string)($report['message'] ?? '')) ?? ''), 0, 200)];
         foreach (['done','total','eta'] as $name) if (is_int($report[$name] ?? null) && $report[$name] >= 0) $progress[$name] = $report[$name];
@@ -969,11 +1050,17 @@ final class Jobs
         return $q->fetchColumn() === 'cancelling';
     }
 
-    /** Starts the upload of the finished video; its pieces go through Vault::appendUpload, checked against this request. */
+    /** The most a picture made on the GPU may weigh (a 20 MP PNG stays well below it). */
+    public const MAX_GPU_PICTURE = 100 * 1048576;
+
+    /**
+     * Starts the upload of the finished video or picture ($maxBytes: the videos' limit); its pieces go through
+     * Vault::appendUpload, checked against this request.
+     */
     public function startVideoUpload(string $id, int $size, int $maxBytes, string $key): string
     {
-        $job = $this->videoJob($id, $key, ['running','uncertain']);
-        $upload = $this->vault->startUpload($size, $maxBytes);
+        $job = $this->gpuJob($id, $key, ['running','uncertain']);
+        $upload = $this->vault->startUpload($size, ($job['payload']['kind'] ?? 'video') === 'image' ? self::MAX_GPU_PICTURE : $maxBytes);
         $job['payload']['upload'] = $upload;
         $this->savePayload($id, $job['payload'], $key); $this->phase($id, 'uploading');
         return $upload;
@@ -982,7 +1069,7 @@ final class Jobs
     /** The upload of a request's video, to receive its pieces (the worker sends the request's id with each one). */
     public function videoUpload(string $id, string $upload, string $key): void
     {
-        $job = $this->videoJob($id, $key, ['running','uncertain']);
+        $job = $this->gpuJob($id, $key, ['running','uncertain']);
         if (($job['payload']['upload'] ?? null) !== $upload) throw new HttpError(409, t('This upload belongs to another request.'));
         $q = $this->vault->db->prepare('UPDATE jobs SET updated=? WHERE id=?'); $q->execute([time(), $id]);
     }
@@ -996,7 +1083,8 @@ final class Jobs
     {
         Vault::validId($id); $job = $this->find($id, $key);
         if ($job && $job['status'] === 'completed' && !empty($job['payload']['image_ids'])) return $this->publicJob($job);
-        $job = $this->videoJob($id, $key, ['running','uncertain','cancelling']);
+        $job = $this->gpuJob($id, $key, ['running','uncertain','cancelling']);
+        if (($job['payload']['kind'] ?? 'video') === 'image') return $this->finishPicture($id, $job, $upload, $info, $key);
         $p = $job['payload'];
         if (($p['upload'] ?? null) !== $upload) throw new HttpError(409, t('This upload belongs to another request.'));
         $title = $p['label'] ?? mb_substr(preg_replace('/\s+/u', ' ', $p['prompt']) ?? '', 0, 80);
@@ -1013,6 +1101,35 @@ final class Jobs
         return $this->publicJob($this->find($id, $key));
     }
 
+    /**
+     * The picture is complete on the server: it becomes a library image like those of the image APIs (a new version of
+     * the image it changes), with the prompt the expander wrote when planning was on ($info: planned_prompt, or
+     * planning 'failed'), the seed, the LoRAs and how it was made.
+     */
+    private function finishPicture(string $id, array $job, string $upload, array $info, string $key): array
+    {
+        $p = $job['payload'];
+        if (($p['upload'] ?? null) !== $upload) throw new HttpError(409, t('This upload belongs to another request.'));
+        $bytes = $this->vault->readUpload($upload, $key);
+        $seed = is_int($info['seed'] ?? null) ? $info['seed'] : null;
+        $planned = is_string($info['planned_prompt'] ?? null) && trim($info['planned_prompt']) !== '' ? mb_substr(trim($info['planned_prompt']), 0, 32000) : null;
+        $skipped = $planned === null && ($p['options']['thinking'] ?? 'off') !== 'off' ? 'failed' : null;
+        $made = array_filter(['seed'=>$seed, 'seconds'=>is_int($info['took'] ?? null) ? $info['took'] : null, 'gpu'=>is_string($info['gpu'] ?? null) ? mb_substr($info['gpu'], 0, 80) : null], fn($v) => $v !== null);
+        $title = $p['label'] ?? mb_substr(preg_replace('/\s+/u', ' ', $p['prompt']) ?? '', 0, 80);
+        try {
+            $item = $this->vault->saveImage($bytes, ['title'=>$title,'prompt'=>$p['prompt'],'original_prompt'=>$p['prompt'],'planned_prompt'=>$planned,'planning_skipped'=>$skipped,
+                'options'=>['seed'=>$seed] + $p['options'],'parent_ids'=>$p['parent_ids'] ?? [],'parent_id'=>$p['parent_id'] ?? null,'operation'=>$p['operation'] ?? 'generate',
+                'label'=>$p['label'] ?? null,'job_id'=>$id,'usage'=>null,'planning_usage'=>null,'variation'=>self::variationInfo($p),'variation_usage'=>$p['variation_usage'] ?? null,
+                'cleaned'=>self::cleanedOf($p),'engine'=>$p['options']['engine'] ?? null,'made'=>$made]
+                + (is_string($p['typed'] ?? null) ? ['typed'=>$p['typed']] : []), $key, is_string($p['album'] ?? null) ? $p['album'] : null);
+        } catch (\RuntimeException $e) { throw new HttpError(422, t('The GPU sent an invalid picture.')); }
+        $p['image_ids'] = [$item['id']]; $p['made'] = $made; unset($p['upload']);
+        $q = $this->vault->db->prepare("UPDATE jobs SET payload=CAST(? AS BLOB),status='completed',phase=NULL,progress=NULL,updated=? WHERE id=?");
+        $q->execute([$this->sealPayload($id, $p, $key), time(), $id]);
+        try { $this->vault->abortUpload($upload); } catch (\Throwable) { /* already gone */ }
+        return $this->publicJob($this->find($id, $key));
+    }
+
     /** The worker could not make the video ($error says why), or stopped it because the owner cancelled it. */
     public function failVideo(string $id, string $error, bool $cancelled, string $key): array
     {
@@ -1021,8 +1138,10 @@ final class Jobs
         if (!in_array($job['status'], ['running','cancelling','uncertain'], true)) return $this->publicJob($job);
         $error = mb_substr(trim(preg_replace('/\s+/u', ' ', $error) ?? ''), 0, 600);
         $cancelled = $cancelled || $job['status'] === 'cancelling';
-        $this->endVideo($id, $job['payload'], $cancelled ? 'cancelled' : 'failed',
-            $cancelled ? t('Cancelled. The GPU stopped making the video.') : ($error === '' ? t('The GPU could not make the video.') : t('The GPU could not make the video: {error}', ['error'=>$error])), $key);
+        $picture = ($job['payload']['kind'] ?? 'video') === 'image';
+        $this->endVideo($id, $job['payload'], $cancelled ? 'cancelled' : 'failed', $picture
+            ? ($cancelled ? t('Cancelled. The GPU stopped making the picture.') : ($error === '' ? t('The GPU could not make the picture.') : t('The GPU could not make the picture: {error}', ['error'=>$error])))
+            : ($cancelled ? t('Cancelled. The GPU stopped making the video.') : ($error === '' ? t('The GPU could not make the video.') : t('The GPU could not make the video: {error}', ['error'=>$error]))), $key);
         return $this->publicJob($this->find($id, $key));
     }
 

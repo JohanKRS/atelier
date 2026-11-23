@@ -129,6 +129,7 @@ from behind, looking at the sea') ?>"></textarea></label>
               <label><?= e('Quality') ?><select id="quality"></select></label>
               <label><?= e('Complexity') ?><select id="complexity"></select></label>
             </div>
+            <div id="loras" class="loras-field stack" hidden></div>
           </div>
           <details class="more" id="more-options">
             <summary><?= e('More options') ?></summary>
@@ -145,7 +146,7 @@ from behind, looking at the sea') ?>"></textarea></label>
               <p class="hint"><?= e('Previews show partial versions while the image is generated. Each preview has a small extra cost.') ?></p>
               <div class="stack advanced-only">
                 <label><?= e('Prompt planning') ?><select id="thinking"></select></label>
-                <p class="hint"><?= e('Rewrites the prompt before generating: with GPT-6 Sol for the GPT Image models, with Gemini 3.8 Flash for Nano Banana. Extra cost. If it refuses, the image is made with the prompt as written.') ?></p>
+                <p class="hint" id="thinking-hint"><?= e('Rewrites the prompt before generating: with GPT-6 Sol for the GPT Image models, with Gemini 3.8 Flash for Nano Banana. Extra cost. If it refuses, the image is made with the prompt as written.') ?></p>
               </div>
               <p id="size-note" class="hint"></p>
               <button type="button" id="restore-defaults" class="link-btn"><?= e('Restore defaults') ?></button>
@@ -581,6 +582,7 @@ from behind, looking at the sea') ?>"></textarea></label>
               <label><?= e('Quality') ?><select id="edit-quality"></select></label>
               <label><?= e('Complexity') ?><select id="edit-complexity"></select></label>
             </div>
+            <div id="edit-loras" class="loras-field stack" hidden></div>
           </div>
           <details class="more" id="edit-more">
             <summary><?= e('More options') ?></summary>
@@ -652,7 +654,7 @@ from behind, looking at the sea') ?>"></textarea></label>
       <p class="settings-group"><?= e('Account') ?></p>
       <button type="button" class="settings-tab" data-pane="account" aria-controls="settings-account"><span data-icon="user"></span><span><?= e('Name and password') ?></span></button>
       <button type="button" class="settings-tab" data-pane="mcp" aria-controls="settings-mcp"><span data-icon="plug"></span><span><?= e('MCP access') ?></span></button>
-      <button type="button" class="settings-tab" data-pane="gpu" aria-controls="settings-gpu"><span data-icon="video"></span><span><?= e('Video (GPU)') ?></span></button>
+      <button type="button" class="settings-tab" data-pane="gpu" aria-controls="settings-gpu"><span data-icon="video"></span><span>GPU</span></button>
       <button type="button" class="settings-tab" data-pane="about" aria-controls="settings-about"><span data-icon="book"></span><span><?= e('About me as a reader') ?></span></button>
       <button type="button" class="settings-tab" data-pane="language" aria-controls="settings-language"><span data-icon="globe"></span><span><?= e('Language') ?></span></button>
       <p class="settings-group"><?= e('System') ?></p>
@@ -828,8 +830,8 @@ from behind, looking at the sea') ?>"></textarea></label>
 
       <section class="settings-pane" id="settings-gpu" aria-labelledby="settings-gpu-title" hidden>
         <div class="pane-head">
-          <h3 id="settings-gpu-title"><?= e('Video (GPU)') ?></h3>
-          <p class="hint"><?= e('Videos with sound made with open models on a GPU you rent by the hour, such as Google Colab. A notebook there takes this account\'s video requests, makes them and sends them to the library, and turns its runtime off by itself when no request comes, so it spends no credits waiting.') ?></p>
+          <h3 id="settings-gpu-title">GPU</h3>
+          <p class="hint"><?= e('Videos with sound and pictures made with open models on a GPU you rent by the hour, such as Google Colab. A notebook there takes this account\'s GPU requests, makes them and sends them to the library, and turns its runtime off by itself when no request comes, so it spends no credits waiting.') ?></p>
         </div>
         <div class="settings-card stack" id="gpu-card">
           <div class="gpu-now"><span class="gpu-dot" aria-hidden="true"></span><strong id="gpu-state"></strong></div>
@@ -844,18 +846,33 @@ from behind, looking at the sea') ?>"></textarea></label>
         </div>
         <div class="settings-card stack">
           <label><?= e('Turn the GPU off after') ?><select id="gpu-idle"></select></label>
-          <p class="hint"><?= e('Minutes without video requests. Each session downloads and loads the model again (a few minutes), so a longer wait is better while you are still making videos.') ?></p>
+          <p class="hint"><?= e('Minutes without requests. Each session downloads and loads the models again (a few minutes), so a longer wait is better while you are still making videos or pictures.') ?></p>
+        </div>
+        <div class="settings-card stack" id="lora-card">
+          <h4>LoRAs</h4>
+          <p class="hint"><?= e('Small add-ons that teach MiniMax H3-Image a style, a character or a look, for the pictures made on the GPU. Paste the link of the .safetensors file on Hugging Face or Civitai; the notebook downloads it the first time a request uses it in a session. A file that asks you to sign in needs the HF_TOKEN or CIVITAI_TOKEN secret in Colab, never here. Choose them in the generator and the edit panel when the model is MiniMax H3-Image.') ?></p>
+          <ul id="lora-list" class="lora-list"></ul>
+          <form id="lora-form" class="stack" autocomplete="off">
+            <label><?= e('Link of the file') ?><input id="lora-url" type="url" inputmode="url" required spellcheck="false" placeholder="https://huggingface.co/…/resolve/main/….safetensors"></label>
+            <div class="row2">
+              <label><?= e('Name') ?><input id="lora-name" maxlength="80" placeholder="<?= e('From the file, if empty') ?>"></label>
+              <label><?= e('Trigger words') ?><input id="lora-trigger" maxlength="200" placeholder="<?= e('Optional, separated by commas') ?>"></label>
+            </div>
+            <label><?= e('Strength it starts at') ?><span class="range-row"><input type="range" id="lora-strength" min="-2" max="2" step="0.05" value="1"><output id="lora-strength-value">1</output></span></label>
+            <p id="lora-error" class="error" role="alert"></p>
+            <div class="row-end"><button type="button" id="lora-cancel" class="btn ghost small" hidden><?= e('Cancel') ?></button><span class="grow"></span><button type="submit" id="lora-save" class="btn primary small"><?= e('Add LoRA') ?></button></div>
+          </form>
         </div>
         <div class="settings-card stack gpu-steps">
           <h4><?= e('How to turn it on') ?></h4>
           <ol>
             <li><?= e('Make a token here and copy it.') ?></li>
-            <li><?= e('Open the notebook in Colab. In Secrets (the key on the left), add ATELIER_URL with this site\'s address and ATELIER_TOKEN with the token, with notebook access on.') ?></li>
+            <li><?= e('Open the notebook in Colab. In Secrets (the key on the left), add ATELIER_URL with this site\'s address and ATELIER_TOKEN with the token, with notebook access on. HF_TOKEN and CIVITAI_TOKEN are only for models and LoRAs that ask you to sign in.') ?></li>
             <li><?= e('Choose the A100 GPU (Runtime › Change runtime type) and Runtime › Run all. Requests made meanwhile wait in line.') ?></li>
           </ol>
           <p class="hint"><?= e('In Colab Pro keep the notebook\'s tab open while you use it. An A100 80 GB uses about 7 to 15 compute units per hour, while it is on.') ?></p>
           <p class="hint" id="gpu-license"></p>
-          <p class="hint"><?= e('Colab does not allow deepfakes: don\'t make videos of real people\'s faces.') ?></p>
+          <p class="hint"><?= e('Colab does not allow deepfakes: don\'t put real people\'s faces in videos or pictures made there.') ?></p>
         </div>
       </section>
 

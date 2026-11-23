@@ -569,6 +569,19 @@ details.plain > .stack, details.plain > form { padding-top: 14px; }
 .settings-pane { display: flex; flex-direction: column; gap: 14px; }
 .pane-head { display: flex; flex-direction: column; gap: 4px; }
 .pane-head h3 { font-size: 15px; }
+/* LoRAs of the GPU's pictures: the account's list (Settings › GPU) and the ones chosen for a request. */
+.lora-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.lora-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+.lora-row:first-child { border-top: 0; padding-top: 0; }
+.lora-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lora-text strong { font-weight: 600; overflow-wrap: anywhere; }
+.lora-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.lora-actions { display: flex; align-items: center; gap: 4px; }
+.loras-field { gap: 8px; margin-top: 10px; }
+.loras-field .field-head { display: flex; align-items: center; justify-content: space-between; }
+.lora-chosen { display: grid; grid-template-columns: minmax(0, 1fr) minmax(110px, 1.2fr) auto; align-items: center; gap: 8px; }
+.lora-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.lora-chosen input[type=range] { min-width: 0; width: 100%; }
 .settings-card, .key-card { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--raised); }
 .settings-card h4 { font-size: 13.5px; font-weight: 600; }
 .settings-card input:not([type=checkbox]), .key-card input { background: var(--panel); }

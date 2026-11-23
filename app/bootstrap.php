@@ -15,6 +15,7 @@ require_once __DIR__.'/ImageClient.php';
 require_once __DIR__.'/OpenAI.php';
 require_once __DIR__.'/Gemini.php';
 require_once __DIR__.'/GeminiImages.php';
+require_once __DIR__.'/GpuImages.php';
 require_once __DIR__.'/Catalog.php';
 require_once __DIR__.'/Presets.php';
 require_once __DIR__.'/Jobs.php';

@@ -1,8 +1,9 @@
-"""Atelier's video worker.
+"""Atelier's GPU worker.
 
-Runs in a notebook on a GPU (Google Colab), takes the video requests of one Atelier account and sends the videos back to
-its library. It only ever calls the Atelier server (gpu.php) with short requests: nothing on the GPU is exposed to the
-internet, no tunnel or proxy is used, and the models run in ComfyUI on 127.0.0.1 inside the runtime.
+Runs in a notebook on a GPU (Google Colab), takes the video and picture requests of one Atelier account and sends the
+videos and pictures back to its library. It only ever calls the Atelier server (gpu.php) with short requests: nothing on
+the GPU is exposed to the internet, no tunnel or proxy is used, and the models run in ComfyUI on 127.0.0.1 inside the
+runtime.
 
     import atelier_worker
     atelier_worker.run('https://atelier.example.com', token)
@@ -11,11 +12,13 @@ The runtime stays on while requests come, so the models are downloaded and loade
 off (google.colab.runtime.unassign) after the account's idle minutes without a request, or when someone presses "Turn
 off now" in Atelier, so the GPU's credits are not spent on waiting.
 
-The notebook (atelier_video.ipynb) loads this file from the Atelier server, so it always matches the server's version.
+The notebook (atelier_gpu.ipynb) loads this file from the Atelier server, so it always matches the server's version.
 """
 from __future__ import annotations
 
 import base64
+import hashlib
+import io
 import json
 import math
 import os
@@ -32,12 +35,12 @@ import urllib.parse
 import urllib.request
 import uuid
 
-VERSION = '1.0'
-USER_AGENT = 'AtelierVideoWorker/' + VERSION
+VERSION = '1.1'
+USER_AGENT = 'AtelierGpuWorker/' + VERSION
 # The ComfyUI release the workflows below were written and checked against (its MiniMax H3 nodes).
 COMFY_REPO = 'https://github.com/comfyanonymous/ComfyUI'
 COMFY_REF = 'v0.46.0'
-# The longest a single video may take before the worker gives up on it.
+# The longest a single video or picture may take before the worker gives up on it.
 JOB_TIMEOUT = 75 * 60
 
 
@@ -218,13 +221,43 @@ def in_colab() -> bool:
     return 'google.colab' in sys.modules or os.path.isdir('/content') and os.environ.get('COLAB_RELEASE_TAG') is not None
 
 
-class Downloads:
-    """The models' files, downloaded once per runtime (aria2c, several connections per file) into ComfyUI's models folder."""
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
 
-    def __init__(self, models: str, hf_token: str | None = None):
+
+class Downloads:
+    """The models' files, downloaded once per runtime (aria2c, several connections per file) into ComfyUI's models folder.
+    Hugging Face gets the HF_TOKEN secret and Civitai the CIVITAI_TOKEN one, for files that need an account."""
+
+    def __init__(self, models: str, hf_token: str | None = None, civitai_token: str | None = None):
         self.models = models
         self.hf_token = hf_token or None
+        self.civitai_token = civitai_token or None
         self.sizes: dict[str, int] = {}
+
+    @staticmethod
+    def host(url: str) -> str:
+        return (urllib.parse.urlparse(url).hostname or '').lower()
+
+    def headers(self, url: str) -> dict:
+        headers = {'User-Agent': USER_AGENT}
+        if self.hf_token and self.host(url) in ('huggingface.co', 'hf.co'):
+            headers['Authorization'] = 'Bearer ' + self.hf_token
+        return headers
+
+    def source(self, url: str) -> str:
+        """The address to download from: Civitai takes its token in the address (its files redirect to storage that
+        refuses other credentials)."""
+        if self.civitai_token and self.host(url) in ('civitai.com', 'www.civitai.com', 'civitai.green'):
+            return url + ('&' if '?' in url else '?') + 'token=' + urllib.parse.quote(self.civitai_token)
+        return url
+
+    def hide(self, text: str) -> str:
+        for secret in (self.hf_token, self.civitai_token):
+            if secret:
+                text = text.replace(secret, '***').replace(urllib.parse.quote(secret), '***')
+        return text
 
     def path(self, folder: str, name: str) -> str:
         return os.path.join(self.models, folder, name)
@@ -236,17 +269,30 @@ class Downloads:
     def size(self, url: str, guess: float) -> int:
         if url in self.sizes:
             return self.sizes[url]
-        headers = {'User-Agent': USER_AGENT}
-        if self.hf_token and 'huggingface.co' in url:
-            headers['Authorization'] = 'Bearer ' + self.hf_token
+        # Civitai answers with a redirect to signed storage, which may refuse a HEAD: its answer is enough.
+        opener = urllib.request.build_opener(_NoRedirect) if 'civitai' in self.host(url) else urllib.request.build_opener()
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, method='HEAD', headers=headers), timeout=30) as response:
+            with opener.open(urllib.request.Request(self.source(url), method='HEAD', headers=self.headers(url)), timeout=30) as response:
                 size = int(response.headers.get('Content-Length') or 0)
+                if 'text/html' in (response.headers.get('Content-Type') or ''):
+                    raise RuntimeError(f'{url} is a web page, not a file. Use the link of the file itself.')
         except urllib.error.HTTPError as error:
-            if error.code in (401, 403):
-                raise RuntimeError(f'Hugging Face refused {url.rsplit("/", 1)[-1]} (HTTP {error.code}). This model asks you to accept its '
-                                   'license on its Hugging Face page and an HF_TOKEN secret in Colab.') from None
-            size = 0
+            if error.code in (301, 302, 303, 307, 308):
+                size = 0
+            elif error.code in (401, 403):
+                if 'civitai' in self.host(url):
+                    raise RuntimeError(f'Civitai refused {url} (HTTP {error.code}). This file needs a Civitai account: add a CIVITAI_TOKEN '
+                                       'secret in Colab with an API key from civitai.com (Account settings › API keys).') from None
+                if 'huggingface' in self.host(url) or self.host(url) == 'hf.co':
+                    raise RuntimeError(f'Hugging Face refused {url.rsplit("/", 1)[-1]} (HTTP {error.code}). This model asks you to accept its '
+                                       'license on its Hugging Face page and an HF_TOKEN secret in Colab.') from None
+                raise RuntimeError(f'{self.host(url)} refused {url.rsplit("/", 1)[-1]} (HTTP {error.code}).') from None
+            elif error.code == 404:
+                raise RuntimeError(f'{url} was not found (HTTP 404). Check the link.') from None
+            else:
+                size = 0
+        except RuntimeError:
+            raise
         except Exception:
             size = 0
         self.sizes[url] = size or int(guess * 1e9)
@@ -284,9 +330,9 @@ class Downloads:
         listing = os.path.join(self.models, '.atelier-downloads.txt')
         with open(listing, 'w') as out:
             for folder, name, url, _ in missing:
-                out.write(f'{url}\n  dir={os.path.join(self.models, folder)}\n  out={name}\n')
-                if self.hf_token and 'huggingface.co' in url:
-                    out.write(f'  header=Authorization: Bearer {self.hf_token}\n')
+                out.write(f'{self.source(url)}\n  dir={os.path.join(self.models, folder)}\n  out={name}\n')
+                if 'Authorization' in self.headers(url):
+                    out.write(f'  header=Authorization: {self.headers(url)["Authorization"]}\n')
         process = subprocess.Popen(['aria2c', '-i', listing, '-j', '4', '-x', '16', '-s', '16', '-k', '4M', '--file-allocation=none',
                                     '--continue=true', '--auto-file-renaming=false', '--allow-overwrite=true', '--max-tries=8',
                                     '--retry-wait=5', '--console-log-level=error', '--summary-interval=0', '--download-result=hide'],
@@ -300,15 +346,13 @@ class Downloads:
         reader.join(5)
         os.remove(listing)
         if process.returncode != 0:
-            raise RuntimeError('The download of the models failed: ' + ''.join(output).strip()[-600:])
+            raise RuntimeError('The download of the models failed: ' + self.hide(''.join(output).strip())[-600:])
         say('download', total, total)
 
     def _urllib(self, folder: str, name: str, url: str, total: int, missing, say) -> None:
-        headers = {'User-Agent': USER_AGENT}
-        if self.hf_token and 'huggingface.co' in url:
-            headers['Authorization'] = 'Bearer ' + self.hf_token
         target = self.path(folder, name)
-        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as response, open(target + '.part', 'wb') as out:
+        with urllib.request.urlopen(urllib.request.Request(self.source(url), headers=self.headers(url)), timeout=60) as response, \
+                open(target + '.part', 'wb') as out:
             last = 0.0
             while chunk := response.read(8 << 20):
                 out.write(chunk)
@@ -324,7 +368,10 @@ class Comfy:
     PHASES = {'UNETLoader': 'loading', 'CLIPLoader': 'loading', 'VAELoader': 'loading', 'LoraLoaderModelOnly': 'loading',
               'LoadImage': 'loading', 'MiniMaxH3ImageToVideo': 'encoding', 'MiniMaxH3ReferenceToVideo': 'encoding',
               'SamplerCustomAdvanced': 'generating', 'VAEDecode': 'decoding', 'VAEDecodeAudio': 'decoding',
-              'CreateVideo': 'saving', 'SaveVideo': 'saving'}
+              'CreateVideo': 'saving', 'SaveVideo': 'saving', 'MiniMaxH3ImageConditioning': 'encoding', 'KSampler': 'generating',
+              'SaveImage': 'saving', 'TextGenerateV2': 'planning'}
+    # The nodes whose steps are the progress of a request.
+    SAMPLERS = ('SamplerCustomAdvanced', 'KSampler', 'TextGenerateV2')
 
     def __init__(self, root: str, port: int = 8188, ref: str = COMFY_REF):
         self.root = root
@@ -427,8 +474,9 @@ class Comfy:
             except Exception:
                 pass
 
-    def run(self, graph: dict, output: str, report, cancelled, timeout: float = JOB_TIMEOUT) -> str:
-        """Runs a workflow (API format) and returns the path of the file its output node saved."""
+    def run(self, graph: dict, output: str, report, cancelled, timeout: float = JOB_TIMEOUT, what: str = 'video') -> str:
+        """Runs a workflow (API format) and returns the path of the file its output node saved, or the text it shows
+        (PreviewAny). what names the result in the messages: video, picture or prompt."""
         if not self.alive():
             raise RuntimeError('ComfyUI is not running: ' + self.log_tail())
         client = uuid.uuid4().hex
@@ -442,7 +490,7 @@ class Comfy:
             answer = self.post('/prompt', {'prompt': graph, 'client_id': client})
             prompt_id = answer['prompt_id']
             started = time.time()
-            sampler = next((k for k, v in graph.items() if v['class_type'] == 'SamplerCustomAdvanced'), None)
+            sampler = next((k for k, v in graph.items() if v['class_type'] in self.SAMPLERS), None)
             report('loading')
             while True:
                 if cancelled():
@@ -450,9 +498,9 @@ class Comfy:
                     raise Cancelled()
                 if time.time() - started > timeout:
                     self.interrupt(prompt_id)
-                    raise RuntimeError(f'The video took more than {timeout // 60} minutes.')
+                    raise RuntimeError(f'The {what} took more than {int(timeout // 60)} minutes.')
                 if not self.alive():
-                    raise RuntimeError('ComfyUI stopped while making the video (often out of memory): ' + self.log_tail())
+                    raise RuntimeError(f'ComfyUI stopped while making the {what} (often out of memory): ' + self.log_tail())
                 if socket is None:
                     time.sleep(3)
                     report(None)
@@ -482,9 +530,9 @@ class Comfy:
                         break
                     report(self.PHASES.get(graph.get(str(node), {}).get('class_type', ''), None))
                 elif kind == 'progress' and str(data.get('node')) == sampler:
-                    report('generating', int(data.get('value', 0)), int(data.get('max', 0)))
+                    report(self.PHASES.get(graph[sampler]['class_type'], 'generating'), int(data.get('value', 0)), int(data.get('max', 0)))
                 elif kind == 'execution_error':
-                    raise RuntimeError(self._error(data))
+                    raise RuntimeError(self._error(data, what))
                 elif kind == 'execution_interrupted':
                     raise Cancelled()
                 elif kind == 'execution_success':
@@ -494,11 +542,17 @@ class Comfy:
             if status.get('status_str') == 'error':
                 for name, data in status.get('messages') or []:
                     if name == 'execution_error':
-                        raise RuntimeError(self._error(data))
-                raise RuntimeError('ComfyUI could not make the video: ' + self.log_tail())
-            files = (history.get('outputs') or {}).get(output, {}).get('images') or []
+                        raise RuntimeError(self._error(data, what))
+                raise RuntimeError(f'ComfyUI could not make the {what}: ' + self.log_tail())
+            result = (history.get('outputs') or {}).get(output, {})
+            if what == 'prompt':
+                text = result.get('text') or []
+                if not text or not isinstance(text[0], str):
+                    raise RuntimeError('ComfyUI finished without the prompt: ' + self.log_tail())
+                return text[0]
+            files = result.get('images') or []
             if not files:
-                raise RuntimeError('ComfyUI finished without a video: ' + self.log_tail())
+                raise RuntimeError(f'ComfyUI finished without a {what}: ' + self.log_tail())
             saved = files[0]
             return os.path.join(self.root, saved.get('type') or 'output', saved.get('subfolder') or '', saved['filename'])
         finally:
@@ -515,11 +569,13 @@ class Comfy:
             return False
 
     @staticmethod
-    def _error(data: dict) -> str:
+    def _error(data: dict, what: str = 'video') -> str:
         message = str(data.get('exception_message') or 'unknown error').strip()
         node = data.get('node_type') or ''
         if 'out of memory' in message.lower() or 'OutOfMemory' in str(data.get('exception_type')):
-            return f'The GPU ran out of memory ({node}). Try 480p, a shorter video or a GPU with more memory (A100 80 GB).'
+            if what == 'video':
+                return f'The GPU ran out of memory ({node}). Try 480p, a shorter video or a GPU with more memory (A100 80 GB).'
+            return f'The GPU ran out of memory ({node}). Try a lower quality, fewer pictures or a GPU with more memory (A100 80 GB).'
         return f'{node}: {message}'[:500]
 
 
@@ -594,9 +650,10 @@ def canvas(width: float, height: float, megapixels: float) -> tuple[int, int]:
 
 
 class Engine:
-    """A video model. id matches the one in Atelier (Gpu::engines)."""
+    """A model. id matches the one in Atelier (Gpu::engines for videos, Gpu::imageEngines for pictures)."""
     id = ''
     label = ''
+    kind = 'video'
 
     def files(self, job: dict) -> list[tuple[str, str, str, float]]:
         return []
@@ -1191,7 +1248,449 @@ class Fake(Engine):
         return path, {'seed': seed}
 
 
-ENGINES = {'h3': H3}
+# Pictures --------------------------------------------------------------------------------------------------------------
+
+def pillow():
+    """Pillow, which comes with Colab and with ComfyUI's packages."""
+    from PIL import Image, ImageFilter, ImageOps
+    Image.MAX_IMAGE_PIXELS = 400_000_000
+    return Image, ImageFilter, ImageOps
+
+
+def ratio(width: int, height: int) -> str:
+    """A width and height as their lowest whole ratio, W:H."""
+    g = math.gcd(int(width), int(height)) or 1
+    return f'{int(width) // g}:{int(height) // g}'
+
+
+def parse_ratio(value) -> tuple[int, int] | None:
+    """W:H (or WxH) as two numbers, when it is a sensible shape for a picture."""
+    match = re.match(r'^\s*(\d{1,5})\s*[:x×]\s*(\d{1,5})\s*$', str(value or ''))
+    if not match or not int(match[1]) or not int(match[2]) or not 0.2 <= int(match[1]) / int(match[2]) <= 5:
+        return None
+    return int(match[1]), int(match[2])
+
+
+def expanded(text: str) -> tuple[str, tuple[int, int] | None]:
+    """The caption and the shape in the prompt expander's answer: one JSON object, after its thinking."""
+    text = re.sub(r'(?s)<think>.*?</think>', '', text or '').strip()
+    start, end = text.find('{'), text.rfind('}')
+    data = None
+    if 0 <= start < end:
+        try:
+            data = json.loads(text[start:end + 1])
+        except ValueError:
+            data = None
+    if isinstance(data, dict):
+        caption = data.get('expanded_caption')
+        shape = data.get('target_aspect_ratio') or data.get('aspect_ratio')
+    else:
+        # A caption with a quotation mark left unescaped: read it up to the key that follows it.
+        match = re.search(r'"expanded_caption"\s*:\s*"(.*)"\s*,\s*"(?:target_)?aspect_ratio"\s*:\s*"([^"]*)"', text, re.S)
+        if not match:
+            match = re.search(r'"(?:target_)?aspect_ratio"\s*:\s*"([^"]*)"\s*,\s*"expanded_caption"\s*:\s*"(.*)"\s*}', text, re.S)
+            caption, shape = (match[2], match[1]) if match else (None, None)
+        else:
+            caption, shape = match[1], match[2]
+        if isinstance(caption, str):
+            caption = caption.replace('\\"', '"').replace('\\n', ' ').replace('\\\\', '\\')
+    if not isinstance(caption, str) or not caption.strip():
+        raise ValueError('the prompt expander did not answer with a caption')
+    return re.sub(r'\s+', ' ', caption).strip(), parse_ratio(shape)
+
+
+def safetensors_ok(path: str) -> bool:
+    """Whether a file is a .safetensors one (and not, say, a sign-in page saved in its place)."""
+    try:
+        with open(path, 'rb') as f:
+            length = int.from_bytes(f.read(8), 'little')
+            if not 2 <= length <= 100_000_000 or length + 8 > os.path.getsize(path):
+                return False
+            return isinstance(json.loads(f.read(length)), dict)
+    except (OSError, ValueError):
+        return False
+
+
+class Pictures:
+    """The pictures of a picture request, as ComfyUI gets them: the ones it sends, in order (<Picture 1>… ; the first is the
+    one being changed), and for a marked area the copy that marks it, last. original and change keep the first picture and
+    the area (255 where it changes) at its own size, to paste the result back only there."""
+
+    MAGENTA = (255, 0, 255)
+
+    def __init__(self, folder: str, job: str):
+        self.folder = folder
+        self.job = job
+        self.names: list[str] = []
+        self.sizes: list[tuple[int, int]] = []
+        self.planner: list[str] = []
+        self.original = None
+        self.change = None
+        self.files: list[str] = []
+
+    def _save(self, image, name: str) -> str:
+        path = os.path.join(self.folder, name)
+        image.save(path, 'PNG', compress_level=1)
+        self.files.append(path)
+        return name
+
+    @staticmethod
+    def flat(image, color: tuple[int, int, int]):
+        """The picture without transparency: what was transparent becomes color."""
+        Image, _, _ = pillow()
+        if image.mode in ('RGBA', 'LA', 'PA') or (image.mode == 'P' and 'transparency' in image.info):
+            rgba = image.convert('RGBA')
+            out = Image.new('RGB', rgba.size, color)
+            out.paste(rgba, mask=rgba.getchannel('A'))
+            return out
+        return image.convert('RGB')
+
+    @staticmethod
+    def fit(image, megapixels: float):
+        """The picture at most this many megapixels (the model reads its pictures at 1 to 2K anyway)."""
+        Image, _, _ = pillow()
+        area = image.width * image.height
+        if area <= megapixels * 1048576:
+            return image
+        scale = math.sqrt(megapixels * 1048576 / area)
+        return image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))), Image.LANCZOS)
+
+    @classmethod
+    def fetch(cls, worker: 'Worker', job: dict, folder: str, report, planner: bool) -> 'Pictures':
+        Image, _, ImageOps = pillow()
+        pictures = cls(folder, job['id'])
+        os.makedirs(folder, exist_ok=True)
+        count = int(job.get('images') or 0)
+        marked = bool(job.get('mask')) and count > 0
+        total = count + (1 if marked else 0)
+        for n in range(count):
+            report('preparing', n, total)
+            data = worker.api.fetch('input', {'job': job['id'], 'index': n})
+            image = Image.open(io.BytesIO(data))
+            image.load()
+            image = ImageOps.exif_transpose(image)
+            # The picture being changed, where an area is marked: what is transparent (the empty canvas of Expandir) is gray.
+            image = cls.flat(image, (128, 128, 128) if marked and n == 0 else (255, 255, 255))
+            if n == 0 and marked:
+                pictures.original = image
+            sent = cls.fit(image, H3Image.MAX_INPUT_MEGAPIXELS)
+            pictures.names.append(pictures._save(sent, f'atelier-{job["id"]}-{n}.png'))
+            pictures.sizes.append(image.size)
+        if marked:
+            report('preparing', count, total)
+            mask = Image.open(io.BytesIO(worker.api.fetch('input', {'job': job['id'], 'index': 'mask'})))
+            mask.load()
+            alpha = mask.convert('RGBA').getchannel('A').resize(pictures.original.size, Image.BILINEAR)
+            # The mask is transparent where the picture changes (as for the image APIs).
+            pictures.change = alpha.point(lambda a: 255 if a < 128 else 0)
+            if pictures.change.getbbox() is None:
+                raise ValueError('The marked area is empty: paint the area to change.')
+            original = cls.fit(pictures.original, 4)
+            change = pictures.change.resize(original.size, Image.NEAREST)
+            painted = Image.blend(original, Image.new('RGB', original.size, cls.MAGENTA), 0.8)
+            pictures.names.append(pictures._save(Image.composite(painted, original, change), f'atelier-{job["id"]}-mark.png'))
+            pictures.sizes.append(pictures.original.size)
+        if planner:
+            # The prompt expander sees the same pictures, smaller.
+            for n, name in enumerate(pictures.names):
+                with Image.open(os.path.join(folder, name)) as image:
+                    pictures.planner.append(pictures._save(cls.fit(image.convert('RGB'), 1), f'atelier-{job["id"]}-plan-{n}.png'))
+        return pictures
+
+    def clean(self) -> None:
+        for path in self.files:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+class H3Image(Engine):
+    """MiniMax H3-Image in ComfyUI, from the official templates (image_minimax_h3_image_t2i and _edit): the int8 model, 6
+    steps of euler at CFG 1 with the negative zeroed out, the pictures as <Picture 1>, <Picture 2>… (the first is the one
+    being changed). Planejar is the templates' prompt expander (Qwen3.5 9B), run as a step of its own before the picture.
+    An area (the brush, Expandir) goes as a copy with the area painted magenta, and the result is pasted into the original
+    only there. The account's LoRAs load on the model at their strengths, their trigger words added to the prompt."""
+    id = 'h3-image'
+    label = 'MiniMax H3-Image'
+    kind = 'image'
+    HF = 'https://huggingface.co/Comfy-Org/'
+    FILES = {
+        'model': ('diffusion_models', 'minimax_h3_image_pruned_int8_convrot.safetensors', HF + 'MiniMax-H3-Image/resolve/main/diffusion_models/', 21.0),
+        'clip': ('text_encoders', 'qwen3vl_32b_minimax_h3_int8_convrot.safetensors', HF + 'MiniMax-H3/resolve/main/text_encoders/', 25.3),
+        'vae': ('vae', 'minimax_h3_image_vae_fp16.safetensors', HF + 'MiniMax-H3-Image/resolve/main/vae/', 1.2),
+        'planner': ('text_encoders', 'qwen3.5_9b_w4a8_gptq.safetensors', HF + 'Qwen3.5/resolve/main/text_encoders/', 6.9),
+    }
+    STEPS = 6
+    # Pictures above this are made smaller before they go to the model, which reads them at 1 to 2K anyway.
+    MAX_INPUT_MEGAPIXELS = 16
+    MAX_MEGAPIXELS = 20
+    # The prompt expander's instructions, as ComfyUI's official templates have them (comfyui-workflow-templates-json).
+    TEMPLATES = {'t2i': 'image_minimax_h3_image_t2i.json', 'edit': 'image_minimax_h3_image_edit.json'}
+    _instructions: dict[str, tuple[str, str]] = {}
+
+    def _file(self, key: str) -> tuple[str, str, str, float]:
+        folder, name, base, size = self.FILES[key]
+        return folder, name, base + name, size
+
+    @staticmethod
+    def lora_file(lora: dict) -> tuple[str, str, str, float]:
+        """Where a LoRA of the account's list goes: named by its id and link, so a link changed in Atelier downloads again."""
+        url = str(lora.get('url') or '')
+        tag = hashlib.sha1(url.encode()).hexdigest()[:8]
+        return 'loras', f'atelier_{re.sub(r"[^a-f0-9]", "", str(lora.get("id") or ""))[:16]}_{tag}.safetensors', url, 0.3
+
+    @staticmethod
+    def plans(job: dict) -> bool:
+        return (job.get('options') or {}).get('thinking', 'off') != 'off'
+
+    def files(self, job: dict) -> list[tuple[str, str, str, float]]:
+        keys = ['model', 'clip', 'vae'] + (['planner'] if self.plans(job) else [])
+        return [self._file(k) for k in keys] + [self.lora_file(l) for l in (job.get('options') or {}).get('loras') or []]
+
+    def preload(self) -> list[tuple[str, str, str, float]]:
+        return [self._file(k) for k in ('model', 'clip', 'vae')]
+
+    # The prompt ---------------------------------------------------------------------------------------------------------
+
+    @classmethod
+    def instructions(cls, kind: str) -> tuple[str, str]:
+        """The expander's system prompt and task (with {input text} where the request goes), read from the templates."""
+        if kind not in cls._instructions:
+            import importlib.resources
+            import comfyui_workflow_templates_json
+            path = importlib.resources.files(comfyui_workflow_templates_json) / 'templates' / cls.TEMPLATES[kind]
+            data = json.loads(path.read_text(encoding='utf-8'))
+            nodes = list(data.get('nodes') or [])
+            for graph in (data.get('definitions') or {}).get('subgraphs') or []:
+                nodes += graph.get('nodes') or []
+            texts = {n.get('title'): (n.get('widgets_values') or [''])[0] for n in nodes if n.get('type') == 'PrimitiveStringMultiline'}
+            system, task = texts.get('Text (system_prompt)'), texts.get('Text (task_prompt)')
+            if not isinstance(system, str) or not isinstance(task, str) or '{input text}' not in task:
+                raise RuntimeError(f'The prompt expander\'s instructions are not in {cls.TEMPLATES[kind]}.')
+            cls._instructions[kind] = (system, task)
+        return cls._instructions[kind]
+
+    @staticmethod
+    def wanted_size(job: dict) -> tuple[int, int] | None:
+        match = re.match(r'^(\d+)x(\d+)$', str((job.get('options') or {}).get('size') or ''))
+        return (int(match[1]), int(match[2])) if match and int(match[1]) and int(match[2]) else None
+
+    def plan_input(self, job: dict, pictures: Pictures) -> tuple[str, str]:
+        """Which expander (t2i or edit) and what it reads: the request as typed, the pictures' shapes and the one asked for."""
+        typed = (job.get('plan') or {}).get('typed') or job['prompt']
+        size = self.wanted_size(job)
+        if not pictures.names:
+            return 't2i', typed + (f'\n\nThe final image is {size[0]}x{size[1]} pixels.' if size else '')
+        lines = [f'Reference Media: <Picture {n + 1}> aspect_ratio {ratio(*s)}' for n, s in enumerate(pictures.sizes)]
+        lines.append('User Editing Instruction: ' + json.dumps(typed, ensure_ascii=False))
+        lines.append('User Aspect Ratio Selection: ' + (ratio(*size) if size else 'adaptive'))
+        return 'edit', '\n'.join(lines)
+
+    def plan(self, comfy: 'Comfy', job: dict, pictures: Pictures, report, cancelled) -> tuple[str, tuple[int, int] | None]:
+        """The expander's caption, and the shape it chose for the picture."""
+        kind, text = self.plan_input(job, pictures)
+        system, task = self.instructions(kind)
+        seed = random.randint(0, 2 ** 53)
+        g: dict[str, dict] = {'planner': {'class_type': 'CLIPLoader', 'inputs': {'clip_name': self.FILES['planner'][1], 'type': 'minimax', 'device': 'default'}}}
+        generate = {'clip': ['planner', 0], 'prompt': task.replace('{input text}', text), 'system_prompt': system, 'max_length': 8192,
+                    'sampling_mode': 'on', 'sampling_mode.temperature': 1.0, 'sampling_mode.top_k': 20, 'sampling_mode.top_p': 0.95,
+                    'sampling_mode.min_p': 0.0, 'sampling_mode.repetition_penalty': 1.0, 'sampling_mode.seed': seed,
+                    'sampling_mode.presence_penalty': 0.0, 'thinking': True, 'use_default_template': True, 'mtp': 'auto'}
+        for n, name in enumerate(pictures.planner):
+            g[f'plan_picture{n}'] = {'class_type': 'LoadImage', 'inputs': {'image': name}}
+            generate[f'images.image{n + 1}'] = [f'plan_picture{n}', 0]
+        g['plan'] = {'class_type': 'TextGenerateV2', 'inputs': generate}
+        g['plan_text'] = {'class_type': 'PreviewAny', 'inputs': {'source': ['plan', 0]}}
+        return expanded(comfy.run(g, 'plan_text', report, cancelled, what='prompt', timeout=15 * 60))
+
+    @staticmethod
+    def final_prompt(job: dict, caption: str | None) -> str:
+        """What the model reads: the expander's caption between what Atelier adds (or the prompt as Atelier sent it), with
+        the trigger words of the LoRAs that are not in it yet."""
+        plan = job.get('plan') or {}
+        prompt = (plan.get('before', '') + caption + plan.get('after', '')) if caption else job['prompt']
+        words = []
+        for lora in (job.get('options') or {}).get('loras') or []:
+            for word in re.split(r'\s*,\s*', str(lora.get('trigger') or '').strip()):
+                if word and word.lower() not in prompt.lower() and word not in words:
+                    words.append(word)
+        return (', '.join(words) + '\n\n' + prompt) if words else prompt
+
+    # The picture --------------------------------------------------------------------------------------------------------
+
+    def canvas(self, job: dict, pictures: Pictures, shape: tuple[int, int] | None) -> tuple[int, int]:
+        """The size the model draws at: the megapixels of the quality (or of the size asked for, when it is bigger), in the
+        shape of the size asked for, of the picture being changed, or the one the expander chose."""
+        o = job.get('options') or {}
+        megapixels = min(self.MAX_MEGAPIXELS, max(1.0, float(o.get('megapixels') or 16)))
+        size = self.wanted_size(job)
+        operation = job.get('operation') or 'generate'
+        if pictures.change is not None:
+            # The result goes back at the original's size: more than that (or than the 4 MP the model needs) is not seen.
+            form = pictures.original.size
+            megapixels = min(megapixels, max(4.0, form[0] * form[1] / 1048576))
+        elif size:
+            form = size
+        elif shape:
+            form = shape
+        elif pictures.sizes and operation != 'generate':
+            form = pictures.sizes[0]
+        else:
+            form = (1, 1)
+        return canvas(*form, megapixels)
+
+    def graph(self, job: dict, pictures: Pictures, prompt: str, width: int, height: int, seed: int) -> tuple[dict, str]:
+        g: dict[str, dict] = {
+            'unet': {'class_type': 'UNETLoader', 'inputs': {'unet_name': self.FILES['model'][1], 'weight_dtype': 'default'}},
+            'clip': {'class_type': 'CLIPLoader', 'inputs': {'clip_name': self.FILES['clip'][1], 'type': 'minimax', 'device': 'default'}},
+            'vae': {'class_type': 'VAELoader', 'inputs': {'vae_name': self.FILES['vae'][1]}},
+        }
+        model = ['unet', 0]
+        for n, lora in enumerate((job.get('options') or {}).get('loras') or []):
+            g[f'lora{n}'] = {'class_type': 'LoraLoaderModelOnly', 'inputs': {'model': model, 'lora_name': self.lora_file(lora)[1],
+                                                                             'strength_model': float(lora.get('strength', 1.0))}}
+            model = [f'lora{n}', 0]
+        condition = {'clip': ['clip', 0], 'vae': ['vae', 0], 'prompt': prompt, 'width': width, 'height': height}
+        for n, name in enumerate(pictures.names):
+            g[f'picture{n}'] = {'class_type': 'LoadImage', 'inputs': {'image': name}}
+            condition[f'images.image_{n}'] = [f'picture{n}', 0]
+        g['condition'] = {'class_type': 'MiniMaxH3ImageConditioning', 'inputs': condition}
+        g['negative'] = {'class_type': 'ConditioningZeroOut', 'inputs': {'conditioning': ['condition', 0]}}
+        g['sampler'] = {'class_type': 'KSampler', 'inputs': {'model': model, 'seed': seed, 'steps': self.STEPS, 'cfg': 1.0, 'sampler_name': 'euler',
+                                                             'scheduler': 'simple', 'positive': ['condition', 0], 'negative': ['negative', 0],
+                                                             'latent_image': ['condition', 1], 'denoise': 1.0}}
+        g['decode'] = {'class_type': 'VAEDecode', 'inputs': {'samples': ['sampler', 0], 'vae': ['vae', 0]}}
+        g['save'] = {'class_type': 'SaveImage', 'inputs': {'images': ['decode', 0], 'filename_prefix': f'atelier/{job["id"]}'}}
+        return g, 'save'
+
+    @staticmethod
+    def finish(worker: 'Worker', job: dict, pictures: Pictures, made) -> str:
+        """The picture as Atelier gets it: pasted into the original only inside the marked area, at the size asked for an
+        upscale, in the format of the request."""
+        Image, ImageFilter, _ = pillow()
+        made = made.convert('RGB')
+        if pictures.change is not None:
+            original = pictures.original
+            made = made.resize(original.size, Image.LANCZOS)
+            # A soft edge a little outside the area, so the seam does not show.
+            edge = max(2, round(min(original.size) * 0.004))
+            change = pictures.change.filter(ImageFilter.MaxFilter(2 * min(edge, 7) + 1)).filter(ImageFilter.GaussianBlur(edge))
+            made = Image.composite(made, original, change)
+        elif (job.get('operation') == 'upscale') and (size := H3Image.wanted_size(job)) and made.size != size:
+            made = made.resize(size, Image.LANCZOS)
+        o = job.get('options') or {}
+        form = o.get('format') if o.get('format') in ('png', 'jpeg', 'webp') else 'png'
+        quality = max(1, min(100, int(o.get('compression') or 90)))
+        path = os.path.join(worker.workdir, f'picture-{job["id"]}.{"jpg" if form == "jpeg" else form}')
+        if form == 'png':
+            made.save(path, 'PNG', compress_level=6)
+        elif form == 'jpeg':
+            made.save(path, 'JPEG', quality=quality, subsampling=0 if quality >= 90 else 2, optimize=True)
+        else:
+            made.save(path, 'WEBP', quality=quality, method=4)
+        return path
+
+    def draw(self, worker: 'Worker', job: dict, pictures: Pictures, prompt: str, width: int, height: int, seed: int, report, cancelled):
+        """The picture from the model, as Pillow opens it."""
+        Image, _, _ = pillow()
+        graph, output = self.graph(job, pictures, prompt, width, height, seed)
+        path = worker.comfy.run(graph, output, report, cancelled, what='picture')
+        try:
+            with Image.open(path) as image:
+                image.load()
+                return image.copy()
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    def expand(self, worker: 'Worker', job: dict, pictures: Pictures, report, cancelled) -> tuple[str, tuple[int, int] | None]:
+        return self.plan(worker.comfy, job, pictures, report, cancelled)
+
+    def folder(self, worker: 'Worker') -> str:
+        return worker.comfy.input_dir()
+
+    def make(self, worker: 'Worker', job: dict, report, cancelled) -> tuple[str, dict]:
+        for lora in (job.get('options') or {}).get('loras') or []:
+            folder, name, _, _ = self.lora_file(lora)
+            path = os.path.join(worker.downloads.models, folder, name) if worker.downloads else ''
+            if path and os.path.isfile(path) and not safetensors_ok(path):
+                os.remove(path)
+                raise RuntimeError(f'The link of the LoRA "{lora.get("name") or name}" did not give a .safetensors file. Check it in '
+                                   'Settings › GPU; on Civitai, a LoRA that asks you to sign in needs a CIVITAI_TOKEN secret in Colab.')
+        planner = self.plans(job)
+        pictures = Pictures.fetch(worker, job, self.folder(worker), report, planner)
+        try:
+            caption, shape = None, None
+            if planner:
+                report('planning')
+                try:
+                    caption, shape = self.expand(worker, job, pictures, report, cancelled)
+                except Cancelled:
+                    raise
+                except Exception as error:
+                    log(f'The prompt expander failed ({error}); making the picture from the prompt as written.')
+            width, height = self.canvas(job, pictures, shape)
+            seed = (job.get('options') or {}).get('seed')
+            seed = seed if isinstance(seed, int) and seed >= 0 else random.randint(0, 2 ** 53)
+            made = self.draw(worker, job, pictures, self.final_prompt(job, caption), width, height, seed, report, cancelled)
+            if cancelled():
+                raise Cancelled()
+            report('finishing')
+            path = self.finish(worker, job, pictures, made)
+            with pillow()[0].open(path) as image:
+                size = image.size
+            return path, {'seed': seed, 'planned_prompt': caption or '', 'width': size[0], 'height': size[1]}
+        finally:
+            pictures.clean()
+
+
+class FakeImage(H3Image):
+    """A stand-in for H3-Image that paints a test pattern with Pillow, for checking the worker and Atelier without a GPU.
+    Everything else is as H3-Image does it: the pictures fetched, the expander's caption (a fake one), the size, the area
+    pasted into the original and the format."""
+
+    def __init__(self, steps: int = 3, pause: float = 0.3):
+        self.steps = steps
+        self.pause = pause
+        self.prompts: list[str] = []
+
+    def files(self, job: dict) -> list[tuple[str, str, str, float]]:
+        return []
+
+    def preload(self) -> list[tuple[str, str, str, float]]:
+        return []
+
+    def folder(self, worker: 'Worker') -> str:
+        return os.path.join(worker.workdir, 'inputs')
+
+    def expand(self, worker: 'Worker', job: dict, pictures: Pictures, report, cancelled) -> tuple[str, tuple[int, int] | None]:
+        kind, text = self.plan_input(job, pictures)
+        if 'plan-fail' in job['prompt']:
+            raise RuntimeError('The test asked the expander to fail.')
+        return f'Expanded ({kind}): ' + text.replace('\n', ' '), (16, 9) if kind == 't2i' else None
+
+    def draw(self, worker: 'Worker', job: dict, pictures: Pictures, prompt: str, width: int, height: int, seed: int, report, cancelled):
+        Image, _, _ = pillow()
+        if 'fail' in job['prompt'] and 'plan-fail' not in job['prompt']:
+            raise RuntimeError('The test asked this request to fail.')
+        report('loading')
+        for step in range(1, self.steps + 1):
+            time.sleep(self.pause)
+            if cancelled():
+                raise Cancelled()
+            report('generating', step, self.steps)
+        self.prompts.append(prompt)
+        # Small, in the shape the model would draw: the size comes from the shape.
+        width, height = canvas(width, height, 0.25)
+        image = Image.linear_gradient('L').resize((width, height)).convert('RGB')
+        tint = Image.new('RGB', (width, height), ((seed * 37) % 256, (seed * 91) % 256, (seed * 53) % 256))
+        return Image.blend(image, tint, 0.5)
+
+
+ENGINES = {'h3': H3, 'h3-image': H3Image}
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -1286,8 +1785,14 @@ class Worker:
                 self.comfy.install(lambda m: self.say(m, 'setup'))
                 self.comfy.start(lambda m: self.say(m, 'setup'))
             if self.preload and self.downloads is not None:
-                for engine in self.engines.values():
-                    self.downloads.ensure(engine.preload(), self.download_progress)
+                # The models of the requests waiting, or of the latest one: the others download when a request needs them.
+                wanted = [e for e in hello.get('queued') or [] if e in self.engines]
+                if not wanted and hello.get('recent') in self.engines:
+                    wanted = [hello['recent']]
+                elif not wanted and 'queued' not in hello:
+                    wanted = list(self.engines)[:1]
+                for engine in wanted:
+                    self.downloads.ensure(self.engines[engine].preload(), self.download_progress)
             return self.loop()
         finally:
             self.ended.set()
@@ -1321,7 +1826,7 @@ class Worker:
             self.process(job)
             self.done += 1
             idle_since = time.time()
-            self.state.set(phase='ready', message='Waiting for requests', idle_since=int(idle_since), progress=None)
+            self.state.set(phase='ready', message='Waiting for requests', idle_since=int(idle_since), progress=None, making=None)
             if self.max_jobs is not None and self.done >= self.max_jobs:
                 return 'done'
 
@@ -1330,10 +1835,15 @@ class Worker:
     def process(self, job: dict) -> None:
         o = job.get('options') or {}
         engine = self.engines.get(o.get('engine', ''))
+        picture = job.get('kind') == 'image'
         started = time.time()
-        log(f'Request {job["id"][:8]}: {engine.label if engine else o.get("engine")} {o.get("mode")}, {o.get("seconds")} s, '
-            f'{o.get("resolution")}, {o.get("quality")}.')
-        self.state.set(phase='busy', message='Making a video', progress=None)
+        if picture:
+            log(f'Request {job["id"][:8]}: {engine.label if engine else o.get("engine")} {job.get("operation", "generate")}, '
+                f'{o.get("quality")} (about {o.get("megapixels")} MP), {job.get("images", 0)} picture(s), {len(o.get("loras") or [])} LoRA(s).')
+        else:
+            log(f'Request {job["id"][:8]}: {engine.label if engine else o.get("engine")} {o.get("mode")}, {o.get("seconds")} s, '
+                f'{o.get("resolution")}, {o.get("quality")}.')
+        self.state.set(phase='busy', message='Making a picture' if picture else 'Making a video', making='picture' if picture else 'video', progress=None)
         cancel = {'wanted': False}
         last = {'at': 0.0, 'phase': None}
 
@@ -1374,17 +1884,22 @@ class Worker:
                 if any(not self.downloads.complete(f, n) for f, n, _, _ in files):
                     report('download', 0, 1)
                     self.downloads.ensure(files, lambda _p, done, total: report('download', int(done // 1048576), int(total // 1048576)))
+            if picture != (getattr(engine, 'kind', 'video') == 'image'):
+                raise RuntimeError(f'{engine.label} does not make {"pictures" if picture else "videos"}.')
             path, extra = engine.make(self, job, report, lambda: cancel['wanted'])
             if cancel['wanted']:
                 raise Cancelled()
-            info = probe(path)
+            info = {} if picture else probe(path)
             report('uploading', 0, 1)
-            upload = self.upload(job['id'], path, report)
+            upload = self.upload(job['id'], path, report, picture)
             took = int(time.time() - started)
-            result = self.api.call('finish', {'job': job['id'], 'upload': upload, 'poster': poster(path, self.workdir), 'took': took,
-                                              'gpu': self.gpu, **info, **extra})
+            result = self.api.call('finish', {'job': job['id'], 'upload': upload, 'took': took, 'gpu': self.gpu, **info, **extra,
+                                              **({} if picture else {'poster': poster(path, self.workdir)})})
             self.state.set(loaded=engine.id)
-            log(f'Request {job["id"][:8]} is in the library ({info["width"]}x{info["height"]}, {info["duration"]:.1f} s, made in {took} s).')
+            if picture:
+                log(f'Request {job["id"][:8]} is in the library ({extra["width"]}x{extra["height"]}, made in {took} s).')
+            else:
+                log(f'Request {job["id"][:8]} is in the library ({info["width"]}x{info["height"]}, {info["duration"]:.1f} s, made in {took} s).')
             try:
                 os.remove(path)
             except OSError:
@@ -1412,10 +1927,11 @@ class Worker:
         except Exception as failure:
             log(f'Could not tell Atelier: {failure}')
 
-    def upload(self, job: str, path: str, report) -> str:
-        """Sends the video in pieces (whole MB, as Atelier stores them); a lost piece is sent again from where the server is."""
+    def upload(self, job: str, path: str, report, picture: bool = False) -> str:
+        """Sends the video or picture in pieces (whole MB, as Atelier stores them); a lost piece is sent again from where
+        the server is."""
         size = os.path.getsize(path)
-        if self.max_bytes and size > self.max_bytes:
+        if self.max_bytes and size > self.max_bytes and not picture:
             raise RuntimeError(f'The video has {size / 1048576:.0f} MB, over this server\'s limit of {self.max_bytes / 1048576:.0f} MB (max_video_mb).')
         answer = self.api.call('upload', {'job': job, 'size': size})
         upload, piece = answer['upload'], int(answer.get('piece') or self.piece)
@@ -1427,15 +1943,16 @@ class Worker:
                 data = f.read(piece)
                 received = int(self.api.call('chunk', raw=data, query={'job': job, 'upload': upload, 'offset': offset}, timeout=120)['received'])
                 if received <= offset:
-                    raise RuntimeError('The server did not take the video piece.')
+                    raise RuntimeError('The server did not take the piece of the file.')
                 offset = received
                 report('uploading', offset, size)
         return upload
 
 
-def run(url: str, token: str, *, comfy_dir: str | None = None, hf_token: str | None = None, shutdown: bool = True,
-        engine: str = 'h3', max_jobs: int | None = None, preload: bool = True) -> str:
-    """Connects to Atelier and makes its video requests until the runtime should turn off. Returns why it stopped."""
+def run(url: str, token: str, *, comfy_dir: str | None = None, hf_token: str | None = None, civitai_token: str | None = None,
+        shutdown: bool = True, engine: str = 'all', max_jobs: int | None = None, preload: bool = True) -> str:
+    """Connects to Atelier and makes its video and picture requests until the runtime should turn off. Returns why it
+    stopped. engine: 'all' (every model), one model's id, or 'fake' (test patterns, with no GPU)."""
     if not url or not token:
         raise SystemExit('Give the Atelier address and the worker token (Colab: the ATELIER_URL and ATELIER_TOKEN secrets).')
     state = State()
@@ -1443,11 +1960,14 @@ def run(url: str, token: str, *, comfy_dir: str | None = None, hf_token: str | N
     colab = in_colab()
     base = '/content' if colab else os.path.abspath('.')
     if engine == 'fake':
-        worker = Worker(api, [Fake()], comfy=None, downloads=None, workdir=os.path.join(base, 'atelier-work'), shutdown=shutdown,
-                        max_jobs=max_jobs, preload=False)
+        worker = Worker(api, [Fake(), FakeImage()], comfy=None, downloads=None, workdir=os.path.join(base, 'atelier-work'),
+                        shutdown=shutdown, max_jobs=max_jobs, preload=False)
     else:
         comfy = Comfy(comfy_dir or os.path.join(base, 'ComfyUI'))
-        worker = Worker(api, [ENGINES[engine]()], comfy=comfy, downloads=Downloads(comfy.models, hf_token),
+        engines = [make() for key, make in ENGINES.items() if engine in ('all', key)]
+        if not engines:
+            raise SystemExit(f'Unknown model {engine}: use all, {", ".join(ENGINES)} or fake.')
+        worker = Worker(api, engines, comfy=comfy, downloads=Downloads(comfy.models, hf_token, civitai_token),
                         workdir=os.path.join(base, 'atelier-work'), shutdown=shutdown, max_jobs=max_jobs, preload=preload)
     why = 'error'
     message = ''
@@ -1484,14 +2004,14 @@ def run(url: str, token: str, *, comfy_dir: str | None = None, hf_token: str | N
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description='Atelier\'s video worker.')
+    parser = argparse.ArgumentParser(description='Atelier\'s GPU worker (videos and pictures).')
     parser.add_argument('--url', default=os.environ.get('ATELIER_URL', ''))
     parser.add_argument('--token', default=os.environ.get('ATELIER_TOKEN', ''))
     parser.add_argument('--comfy', default=None, help='where ComfyUI is (or goes)')
-    parser.add_argument('--engine', default='h3', choices=['h3', 'fake'])
+    parser.add_argument('--engine', default='all', choices=['all', *ENGINES, 'fake'])
     parser.add_argument('--max-jobs', type=int, default=None)
     parser.add_argument('--no-preload', action='store_true')
     parser.add_argument('--keep-runtime', action='store_true', help='do not turn the Colab runtime off at the end')
     a = parser.parse_args()
-    print(run(a.url, a.token, comfy_dir=a.comfy, hf_token=os.environ.get('HF_TOKEN'), shutdown=not a.keep_runtime, engine=a.engine,
-              max_jobs=a.max_jobs, preload=not a.no_preload))
+    print(run(a.url, a.token, comfy_dir=a.comfy, hf_token=os.environ.get('HF_TOKEN'), civitai_token=os.environ.get('CIVITAI_TOKEN'),
+              shutdown=not a.keep_runtime, engine=a.engine, max_jobs=a.max_jobs, preload=not a.no_preload))

@@ -4,6 +4,24 @@ What changed in each version of Atelier. Versions follow [Semantic Versioning](h
 
 To update an install, replace the app files with the ones from the new zip and keep `config.php`, `data-dir.php` (if present) and the data folder.
 
+## [1.4.0] - 2026-11-23
+
+### Pictures on the GPU
+
+- **MiniMax H3-Image**, an open picture model, on the same GPU notebook as the videos. It is one more model in the generator and the edit panel (Advanced › Model), and works with the same tools: references from the library (`@1`, up to 16), Variations, edits by describing, an area painted with the brush, Expand, Upscale, Photoreal, Enhance and Clean. There is no cost per picture: the GPU's time is paid to whoever rents it, such as Colab's compute units.
+- The quality sets the megapixels (Low 4 MP, Medium 8 MP, High 16 MP, the model's native size); the size sets the shape. A custom size can be anything from 64 to 12,000 pixels a side, up to 40 MP and 5:1. Upscales and expansions are drawn at up to 20 MP and brought to the size asked for.
+- **Planning** with H3-Image is MiniMax's own prompt expander, from ComfyUI's official templates, running on the GPU at no cost: it rewrites the prompt with the pictures in view and, with the size on Auto, chooses the shape. If it fails, the picture is made with the prompt as written, and the details say so.
+- A painted area or an expansion changes only that area: the model gets a copy of the picture with the area marked, and the notebook pastes the result into the original inside the area, so the rest stays exactly as it was. Edits keep the size of the picture being changed.
+- **LoRAs**: a list in **Settings › GPU** (the link of the `.safetensors` file on Hugging Face or Civitai, a name, trigger words and the strength it starts at). Choose up to 4 per request in the generator or the edit panel, each with its strength from -2 to 2. The notebook downloads each one the first time a request uses it in a session and adds its trigger words to the prompt. Files that ask you to sign in use the `HF_TOKEN` or `CIVITAI_TOKEN` secret in Colab, never Atelier. A picture's details list its LoRAs, seed and GPU.
+- The model's license (MiniMax-H3-Image Community License) doesn't allow use in the United States, the European Union, the United Kingdom or South Korea, and offering it to others as a service needs MiniMax's authorization.
+
+### GPU
+
+- **Settings › Video (GPU)** is now **Settings › GPU**, and the notebook is now `colab/atelier_gpu.ipynb` (it replaces `colab/atelier_video.ipynb`, which can be deleted from the server). Its new optional secret `CIVITAI_TOKEN` is only for LoRAs that ask you to sign in.
+- The notebook downloads only the models the waiting requests need (or the latest one's), and each other model the first time a request needs it in the session: about 45 GB for videos, 47 GB for pictures and 7 GB for the prompt expander.
+- The page shows what the GPU is doing for pictures too (preparing the pictures, planning the prompt, the steps, the upload), and the **GPU** chip says whether it is making a video or a picture.
+- Update note: upload the whole `colab/` folder (the notebook was renamed) with `gpu.php` and the rest of the app.
+
 ## [1.2.0] - 2026-11-23
 
 ### Videos
@@ -67,6 +85,7 @@ The first public release.
 - English and Brazilian Portuguese.
 - PHP 8.2 or newer with SQLite, no build step. Long requests keep going in the background, or in a separate process (`bin/worker.php`) on hosts that stop web processes early.
 
+[1.4.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.4.0
 [1.2.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.2.0
 [1.1.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.1.0
 [1.0.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.0.0

@@ -1687,7 +1687,8 @@ export function createStories(ctx) {
     fillEfforts(w.provider, w.effort, w.model);
     $('#writer-chapter-words').value = w.chapter_words;
     setIllustrateChoice(S.illustrateMode(w.illustrate));
-    $('#writer-image-model').replaceChildren(...Object.entries(models()).map(([id, m]) => h('option', { value: id, selected: id === w.image_model }, m.label)));
+    // The writer's pictures come from the image APIs: the models of the account's GPU are not offered there.
+    $('#writer-image-model').replaceChildren(...Object.entries(models()).filter(([, m]) => m.provider !== 'gpu').map(([id, m]) => h('option', { value: id, selected: id === w.image_model }, m.label)));
     $('#writer-image-quality').value = w.image_quality;
     $('#writer-cover').checked = w.cover !== 'ask'; $('#writer-sheets').checked = w.sheets !== 'ask';
     $('#writer-image-scale').value = String(w.image_scale || '1');

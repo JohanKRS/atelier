@@ -14,7 +14,7 @@ namespace Studio;
 final class Mcp
 {
     public const PROTOCOLS = ['2025-11-25','2025-06-18','2025-03-26','2024-11-05'];
-    public const VERSION = '1.2.0';
+    public const VERSION = '1.4.0';
     private const LONG_TOOLS = ['generate_image','edit_image','upscale_image'];
     /** Story tools that may wait for a picture still being made (a reference, the previous page), so they are streamed too. */
     private const STORY_WAITS = ['illustrate','character_sheet','set_style','edit_illustration','draw_comic_page','comic_settings','make_sprite','make_background','make_cg','update_art'];
@@ -89,7 +89,8 @@ TEXT;
 
     public static function tools(): array
     {
-        $all = Images::models(); $models = array_keys($all);
+        // The GPU's models make pictures only while its notebook is on: not through MCP, whose calls wait for the picture.
+        $all = array_filter(Images::models(), fn($m) => ($m['provider'] ?? '') !== 'gpu'); $models = array_keys($all);
         $size = ['type'=>'string','description'=>'Aspect ratio ('.implode(', ', array_keys(OpenAI::SIZES)).'), an exact WIDTHxHEIGHT in multiples of 16 '
             .'(up to 3840 per side, at most 3:1, 0.65 to 8.3 megapixels, e.g. 2048x1152), or auto.'];
         $quality = ['type'=>'string','enum'=>['low','medium','high','xhigh','max','auto'],'description'=>'Default high. xhigh and max only on GPT Image 2.5 and 2.6. On Nano Banana (gemini-*) it sets how much the model thinks first: low, medium or high (Nano Banana Pro: always high). Higher costs more.'];
@@ -252,9 +253,11 @@ TEXT;
     private function options(array $args, array $base = []): array
     {
         // Options copied from an older image may name a model that is gone, or a quality the chosen model lacks.
-        if (Images::model((string)($base['model'] ?? '')) === null) unset($base['model']);
+        // An image made on the GPU is changed here with the default model: the GPU's are not offered through MCP.
+        if (Images::model((string)($base['model'] ?? '')) === null || Images::provider((string)$base['model']) === 'gpu') unset($base['model'], $base['loras'], $base['seed'], $base['engine']);
         $o = array_merge($base, ['n'=>1, 'previews'=>0, 'thinking'=>'off']);
         foreach (['model','quality','background','format'] as $name) if (isset($args[$name])) $o[$name] = $args[$name];
+        if (is_string($o['model'] ?? null) && Images::provider($o['model']) === 'gpu') throw new HttpError(422, 'The GPU models are not available through MCP: they make pictures only while the notebook is on. Choose another model.');
         $model = Images::model((string)($o['model'] ?? 'gpt-image-2.6-flare'));
         if ($model && !isset($args['quality']) && in_array($o['quality'] ?? '', ['xhigh','max'], true) && !$model['extended']) $o['quality'] = 'high';
         // A source made with a transparent background, edited with Nano Banana, which has none.

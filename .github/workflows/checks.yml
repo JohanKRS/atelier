@@ -60,6 +60,7 @@ jobs:
           php tests/vn.php
           php tests/albums.php
           php tests/video_prompt.php
+          php tests/gpu_images.php
           php tests/i18n.php
       - name: Installation regression checks
         run: |
@@ -74,8 +75,9 @@ jobs:
           PHP_CLI_SERVER_WORKERS=4 php -S 127.0.0.1:8099 -t . > "$RUNNER_TEMP/imagegen-server.log" 2>&1 &
           for attempt in 1 2 3 4 5; do curl -s http://127.0.0.1:8099/ > /dev/null && break; sleep 1; done
           python3 tests/http_checks.py http://127.0.0.1:8099 "$test_data" "$test_token"
-          # Videos on the GPU worker, with its test pattern engine (ffmpeg) instead of a GPU.
+          # Videos and pictures on the GPU worker, with its test pattern engines (ffmpeg, Pillow) instead of a GPU.
           command -v ffmpeg > /dev/null || sudo apt-get install -y -qq ffmpeg
+          python3 -c 'import PIL' 2> /dev/null || python3 -m pip install -q pillow
           python3 tests/gpu_checks.py http://127.0.0.1:8099 "$test_data" "$test_token"
       - name: Browser integration and visual checks
         if: matrix.php == '8.3'

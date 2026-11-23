@@ -1,11 +1,11 @@
-"""Video on a GPU worker (Gpu, gpu.php, colab/atelier_worker.py), end to end against an isolated test instance, never
-production. The worker runs here with its test pattern engine (ffmpeg) instead of ComfyUI, so no GPU is needed.
+"""Videos and pictures on a GPU worker (Gpu, gpu.php, colab/atelier_worker.py), end to end against an isolated test instance, never
+production. The worker runs here with its test pattern engines (ffmpeg, Pillow) instead of ComfyUI, so no GPU is needed.
 
     python3 tests/gpu_checks.py http://127.0.0.1:8099 <data dir> <setup token>
 
 Runs on a fresh instance (it makes the first account) or after tests/http_checks.py (it signs in with TEST_PASSWORD).
 """
-import base64, hashlib, http.cookiejar, json, os, sqlite3, struct, sys, tempfile, threading, time, urllib.error, urllib.request, zlib
+import base64, hashlib, http.cookiejar, io, json, os, sqlite3, struct, sys, tempfile, threading, time, urllib.error, urllib.request, zlib
 
 base, data_dir, setup_token = sys.argv[1:]
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'colab'))
@@ -257,6 +257,89 @@ check(gpu('progress', {'job': new_id(), 'phase': 'generating'}, token=token)[0] 
 code, ended = gpu('fail', {'job': lost, 'error': 'gone'}, token=token)
 check(code == 200 and ended['job']['status'] == 'failed', 'the worker can still close it')
 check(gpu('progress', {'job': lost, 'phase': 'generating'}, token=token)[0] == 409, 'a request that ended tells the worker to drop it')
+
+# Pictures with MiniMax H3-Image: the same requests as the image APIs, made by the worker (its Pillow test pattern here).
+from PIL import Image, ImageDraw  # noqa: E402
+
+
+def picture_url(image, kind='PNG'):
+    buffer = io.BytesIO()
+    image.save(buffer, kind)
+    return f'data:image/{kind.lower()};base64,' + base64.b64encode(buffer.getvalue()).decode()
+
+
+def picture_of(image_id):
+    return Image.open(io.BytesIO(owner.client.open(base + '/index.php?action=image&id=' + image_id).read()))
+
+
+check(request('gpu-lora', {'url': 'https://huggingface.co/someone/loras/blob/main/README.md'})[0] == 422, 'a LoRA link must be a .safetensors file')
+code, saved = request('gpu-lora', {'url': 'https://huggingface.co/someone/loras/blob/main/watercolor_v2.safetensors', 'trigger': 'wtrclr style', 'strength': 0.8})
+entry = (saved.get('loras') or [{}])[-1]
+check(code == 200 and entry['name'] == 'watercolor v2' and entry['url'].endswith('/resolve/main/watercolor_v2.safetensors'), 'a LoRA from Hugging Face joins the list, named after its file')
+lora = entry['id']
+check([l['id'] for l in request('gpu-loras')[1]['loras']] == [lora], 'the list of LoRAs comes back')
+check(request('state')[1]['models'].get('minimax-h3-image', {}).get('provider') == 'gpu', 'the generator offers MiniMax H3-Image')
+painted = new_id()
+code, created = request('create', {'id': painted, 'prompt': 'A lighthouse at dusk, @1 style', 'references': [{'data': picture_url(Image.new('RGB', (300, 200), (20, 90, 160)))}],
+                                   'options': {'model': 'minimax-h3-image', 'quality': 'low', 'size': '1536x1024', 'format': 'jpeg', 'compression': 80,
+                                               'thinking': 'medium', 'seed': 4242, 'loras': [{'id': lora, 'strength': 0.6}]}})
+check(code == 201 and created['job']['runner'] == 'gpu' and created['job']['kind'] == 'image' and created['job']['status'] == 'queued', 'a picture request waits for the GPU')
+check(gpu('hello', {}, token=token)[1]['queued'] == ['h3-image'], 'a worker that starts knows which models the waiting requests need')
+fake = w.FakeImage(steps=2, pause=0.1)
+run = Run(token, engine=fake, max_jobs=1)
+check(run.wait() == 'done', 'the worker takes the picture request and finishes it')
+done = job(owner, painted)
+check(done['status'] == 'completed' and len(done['image_ids']) == 1, 'the request is completed with its picture')
+item = request('detail&id=' + done['image_ids'][0])[1]['image']
+check(item['mime'] == 'image/jpeg' and abs(item['width'] / item['height'] - 1.5) < 0.05, 'the picture comes in the format and the shape asked for')
+check(item['options']['seed'] == 4242 and item['options']['loras'][0]['strength'] == 0.6 and item['options']['loras'][0]['name'] == 'watercolor v2', 'it keeps its seed and the LoRAs it was made with')
+check(item['planned_prompt'].startswith('Expanded (edit): Reference Media: <Picture 1> aspect_ratio 3:2') and 'A lighthouse at dusk, <Picture 1> style' in item['planned_prompt']
+      and 'User Aspect Ratio Selection: 3:2' in item['planned_prompt'], 'Plan gives the expander the request, the pictures\' shapes and the shape asked for')
+check(fake.prompts[-1].startswith('wtrclr style\n\n') and 'Expanded (edit)' in fake.prompts[-1], 'the model gets the expanded prompt with the LoRA\'s trigger words')
+
+# Expanding a picture of the library: the new areas come from the GPU and the original stays exactly as it was.
+original = Image.new('RGB', (400, 300), (200, 40, 40))
+code, imported = request('import', {'data': picture_url(original)})
+parent = imported['image']['id']
+frame = Image.new('RGBA', (600, 300), (0, 0, 0, 0))
+frame.paste(original, (100, 0))
+area = Image.new('RGBA', (600, 300), (0, 0, 0, 0))
+ImageDraw.Draw(area).rectangle((100, 0, 499, 299), fill=(0, 0, 0, 255))
+expanding = new_id()
+code, created = request('create', {'id': expanding, 'prompt': 'Expand the image by filling only the transparent areas.', 'operation': 'expand', 'parent_id': parent,
+                                   'references': [{'data': picture_url(frame), 'source_id': parent}], 'mask': picture_url(area), 'label': 'Expansion',
+                                   'options': {'model': 'minimax-h3-image', 'quality': 'medium', 'size': '600x300', 'format': 'png', 'thinking': 'off'}})
+check(code == 201 and created['job']['runner'] == 'gpu', 'an expansion goes to the GPU')
+run = Run(token, engine=w.FakeImage(steps=2, pause=0.1), max_jobs=1)
+check(run.wait() == 'done', 'the worker expands the picture')
+done = job(owner, expanding)
+item = request('detail&id=' + done['image_ids'][0])[1]['image']
+result = picture_of(done['image_ids'][0]).convert('RGB')
+check(item['parent_ids'] == [parent] and result.size == (600, 300) and item.get('planned_prompt') in (None, ''), 'the expansion is a new version at the frame\'s size')
+check(result.getpixel((300, 150)) == (200, 40, 40) and result.getpixel((20, 150)) != (200, 40, 40) and result.getpixel((20, 150)) != (128, 128, 128),
+      'the original stays as it was and the new areas are drawn')
+
+# A picture the GPU cannot make fails with its reason; the expander failing only skips Plan.
+failing = new_id()
+request('create', {'id': failing, 'prompt': 'please fail', 'options': {'model': 'minimax-h3-image', 'quality': 'low', 'size': '1024x1024'}})
+run = Run(token, engine=w.FakeImage(steps=1, pause=0.05), max_jobs=1)
+run.wait()
+check(job(owner, failing)['status'] == 'failed' and 'The test asked this request to fail' in job(owner, failing)['error'], 'a picture the GPU cannot make fails with its reason')
+skipped = new_id()
+request('create', {'id': skipped, 'prompt': 'plan-fail: a quiet harbor', 'options': {'model': 'minimax-h3-image', 'quality': 'low', 'size': '1024x1024', 'thinking': 'medium'}})
+run = Run(token, engine=w.FakeImage(steps=1, pause=0.05), max_jobs=1)
+run.wait()
+done = job(owner, skipped)
+item = request('detail&id=' + done['image_ids'][0])[1]['image']
+check(done['status'] == 'completed' and not item.get('planned_prompt') and item.get('planning_skipped') == 'failed', 'when the expander fails the picture is made from the prompt as written')
+check(gpu('hello', {}, token=token)[1]['recent'] == 'h3-image', 'a worker that starts with nothing waiting loads the model used last')
+check(request('gpu-lora-delete', {'id': lora})[0] == 200 and not request('gpu-loras')[1]['loras'], 'a LoRA leaves the list')
+for made in (painted, expanding, skipped):
+    for made_id in job(owner, made)['image_ids']:
+        request('trash', {'id': made_id})
+        request('purge', {'id': made_id})
+request('trash', {'id': parent})
+request('purge', {'id': parent})
 
 # Turning off: from the page, when idle, and when the token is revoked.
 run = Run(token)

@@ -1,7 +1,7 @@
 import { t, number } from './i18n.js';
-// Videos made on a GPU worker (Gpu.php, gpu.php, colab/): the window that asks for one, the state of the GPU (header chip,
-// Settings › Video (GPU)) and how a video request reads in the feed. The worker is a notebook in Google Colab that takes
-// the requests from the server; this page only talks to the server.
+// Videos and pictures made on a GPU worker (Gpu.php, gpu.php, colab/): the window that asks for a video, the state of the
+// GPU (header chip, Settings › GPU), the account's LoRAs for the pictures and how a GPU request reads in the feed. The
+// worker is a notebook in Google Colab that takes the requests from the server; this page only talks to the server.
 
 /** "16:9" → 16 / 9. */
 export function aspectRatio(aspect) {
@@ -9,25 +9,28 @@ export function aspectRatio(aspect) {
   return w > 0 && h > 0 ? w / h : 16 / 9;
 }
 
-/** What a video request in the feed is doing, from its phase and the steps the worker reported. */
+/** What a GPU request in the feed (a video or a picture) is doing, from its phase and the steps the worker reported. */
 export function videoPhase(job, worker) {
   if (job.status === 'cancelling') return t('Cancelling…');
   if (job.status === 'queued') return worker ? t('Waiting its turn on the GPU') : t('Waiting for the GPU to turn on');
+  const picture = job.kind === 'image';
   const p = job.progress || {}, steps = p.total > 0 ? { done: number(p.done || 0), total: number(p.total) } : null;
   switch (job.phase) {
     case 'claimed': return t('Starting on the GPU');
     case 'download': return steps && p.total > 1 ? t('Downloading the model: {done} of {total} MB', steps) : t('Downloading the model');
+    case 'preparing': return picture ? t('Preparing the pictures') : t('Preparing the videos');
+    case 'planning': return t('Planning the prompt (MiniMax\'s expander)');
     case 'loading': return t('Loading the model');
-    case 'encoding': return t('Reading the prompt');
+    case 'encoding': return picture ? t('Reading the prompt and the pictures') : t('Reading the prompt');
     case 'generating': {
-      if (!steps) return t('Generating the video');
+      if (!steps) return picture ? t('Generating the picture') : t('Generating the video');
       const left = p.eta > 0 ? t('about {time} left', { time: p.eta >= 90 ? t('{n} min', { n: number(Math.round(p.eta / 60)) }) : t('{n} s', { n: number(p.eta) }) }) : '';
       return [t('Generating: step {done} of {total}', steps), left].filter(Boolean).join(' · ');
     }
-    case 'decoding': return t('Decoding the picture and the sound');
-    case 'saving': return t('Saving the video');
+    case 'decoding': return picture ? t('Decoding the picture') : t('Decoding the picture and the sound');
+    case 'saving': case 'finishing': return picture ? t('Finishing the picture') : t('Saving the video');
     case 'uploading': return p.total > 1 ? t('Sending to the library: {percent}%', { percent: number(Math.floor(100 * (p.done || 0) / p.total)) }) : t('Sending to the library');
-    default: return t('Making the video');
+    default: return picture ? t('Making the picture') : t('Making the video');
   }
 }
 
@@ -46,7 +49,7 @@ export function createGpu(ctx) {
     if (!w) return '';
     if (w.phase === 'download') return w.progress?.total ? t('Downloading the model: {done} of {total} GB', { done: number(Math.round((w.progress.done || 0) / 102.4) / 10), total: number(Math.round(w.progress.total / 102.4) / 10) }) : t('Downloading the model');
     if (w.phase === 'setup') return t('Getting ready: {message}', { message: w.message || '…' });
-    if (w.phase === 'busy') return t('Making a video');
+    if (w.phase === 'busy') return w.making === 'picture' ? t('Making a picture') : t('Making a video');
     return t('Ready for requests');
   }
   function gpuName(w) { return [w.gpu, w.vram ? `${number(Math.round(w.vram / 1024))} GB` : ''].filter(Boolean).join(' · '); }
@@ -54,7 +57,7 @@ export function createGpu(ctx) {
   function summary() {
     const w = worker(), s = gpu.status;
     if (!s) return { on: false, text: t('Checking the GPU…') };
-    if (!w) return { on: false, text: s.token ? t('The GPU is off. Requests wait until you turn it on in Colab.') : t('The GPU is not set up yet. Open Settings › Video (GPU).') };
+    if (!w) return { on: false, text: s.token ? t('The GPU is off. Requests wait until you turn it on in Colab.') : t('The GPU is not set up yet. Open Settings › GPU.') };
     const off = w.phase === 'ready' && w.off_at ? t('turns off at {time} without requests', { time: new Date(w.off_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }) : '';
     return { on: true, text: [gpuName(w), phaseLine(w), w.stopping ? t('turning off') : off].filter(Boolean).join(' · ') };
   }
@@ -69,11 +72,11 @@ export function createGpu(ctx) {
     try { await gpu.busy; } finally { gpu.busy = null; }
     return gpu.status;
   }
-  /** Asks again every few seconds while something on screen shows the GPU, or while video requests wait or run. */
+  /** Asks again every few seconds while something on screen shows the GPU, or while GPU requests wait or run. */
   function schedule() {
     clearTimeout(gpu.timer);
     const watching = dialog.open || !$('#settings-gpu').hidden && $('#settings-dialog').open;
-    const videos = activeJobs().some(j => j.kind === 'video');
+    const videos = activeJobs().some(j => j.runner === 'gpu');
     const delay = watching ? 4000 : videos || worker() ? 15000 : 0;
     if (!delay) return;
     gpu.timer = setTimeout(async () => { if (!document.hidden) await refresh(); schedule(); }, delay);
@@ -82,16 +85,16 @@ export function createGpu(ctx) {
   function render() {
     const w = worker(), s = summary();
     const chip = $('#gpu-chip');
-    chip.hidden = !w && !activeJobs().some(j => j.kind === 'video');
+    chip.hidden = !w && !activeJobs().some(j => j.runner === 'gpu');
     chip.classList.toggle('on', !!w); chip.classList.toggle('busy', w?.phase === 'busy' || w?.phase === 'download' || w?.phase === 'setup');
-    $('#gpu-chip-text').textContent = !w ? t('off') : w.phase === 'busy' ? t('making a video') : w.phase === 'ready' ? t('on') : t('getting ready');
+    $('#gpu-chip-text').textContent = !w ? t('off') : w.phase === 'busy' ? (w.making === 'picture' ? t('making a picture') : t('making a video')) : w.phase === 'ready' ? t('on') : t('getting ready');
     chip.title = s.text;
     if (dialog.open) renderDialogGpu();
     if (!$('#settings-gpu').hidden) renderPane();
     ctx.changed?.();
   }
 
-  // Settings › Video (GPU) ---------------------------------------------------------------------------------------------
+  // Settings › GPU ------------------------------------------------------------------------------------------------------
 
   function renderPane() {
     const status = gpu.status; if (!status) return;
@@ -100,7 +103,7 @@ export function createGpu(ctx) {
     $('#gpu-state').textContent = w ? t('On: {gpu}', { gpu: gpuName(w) || 'GPU' }) : t('Off');
     const lines = w ? [phaseLine(w)] : [s.text];
     if (w?.phase === 'ready' && w.off_at) lines.push(t('It turns off by itself at {time} if no request comes.', { time: new Date(w.off_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }));
-    if (w?.stopping) lines.push(t('Turning off: it finishes the video it is making first.'));
+    if (w?.stopping) lines.push(t('Turning off: it finishes what it is making first.'));
     if (status.queued || status.running) lines.push(t('{queued} waiting, {running} being made.', { queued: number(status.queued), running: number(status.running) }));
     if (w?.started) lines.push(t('On since {time}.', { time: dateTime(w.started) }));
     $('#gpu-detail').textContent = lines.filter(Boolean).join(' ');
@@ -113,7 +116,8 @@ export function createGpu(ctx) {
     const idle = $('#gpu-idle');
     if (idle.options.length !== status.idle_choices.length) idle.replaceChildren(...status.idle_choices.map(m => h('option', { value: String(m) }, t('{n} minutes without requests', { n: number(m) }))));
     if (document.activeElement !== idle) idle.value = String(status.idle_minutes);
-    $('#gpu-license').textContent = engine()?.license || '';
+    $('#gpu-license').textContent = [engine()?.license, ...Object.values(status.image_engines || {}).map(e => e.license)].filter(Boolean).join(' ');
+    renderLoras();
   }
   function tokenRows(url, token) {
     const row = (label, value) => {
@@ -124,7 +128,7 @@ export function createGpu(ctx) {
       } }, icon('copy'));
       return h('label', {}, label, h('span', { class: 'copy-row' }, input, copy));
     };
-    return [h('p', { class: 'hint attention' }, t('Copy it now: the token is not shown again. Whoever has it can read this account\'s video requests and add videos to its library.')),
+    return [h('p', { class: 'hint attention' }, t('Copy it now: the token is not shown again. Whoever has it can read this account\'s GPU requests and add videos and pictures to its library.')),
       row('ATELIER_URL', url), row('ATELIER_TOKEN', token)];
   }
   $('#gpu-token').onclick = async () => {
@@ -148,9 +152,91 @@ export function createGpu(ctx) {
   $('#gpu-chip').onclick = () => showSettings('gpu');
   $('#settings-dialog').addEventListener('close', () => { $('#gpu-token-output').replaceChildren(); $('#gpu-token-output').hidden = true; });
   async function stop() {
-    if (!await confirmAction({ title: t('Turn the GPU off now?'), message: t('The runtime turns off after the video it is making, if any. Requests that wait stay in line for the next time.'), confirm: t('Turn off') })) return;
+    if (!await confirmAction({ title: t('Turn the GPU off now?'), message: t('The runtime turns off after what it is making, if anything. Requests that wait stay in line for the next time.'), confirm: t('Turn off') })) return;
     try { gpu.status = await api('gpu-stop', {}); render(); toast(t('The GPU turns off in a few seconds.')); }
     catch (err) { toast(err.message, { tone: 'error' }); }
+  }
+
+  // LoRAs for the pictures (Settings › GPU) ------------------------------------------------------------------------------
+  // The account's list: a link to the .safetensors file (Hugging Face or Civitai), a name, the words that call it up and
+  // the strength it starts at. The notebook downloads each one the first time a request uses it in a session.
+
+  const loras = { list: null, loading: null, editing: null };
+  /** The account's LoRAs, asked once (and again after a change). */
+  async function loadLoras(force = false) {
+    if (loras.list && !force) return loras.list;
+    if (!loras.loading) loras.loading = api('gpu-loras').then(r => { loras.list = r.loras || []; return loras.list; }).finally(() => { loras.loading = null; });
+    const list = await loras.loading;
+    renderLoras(); ctx.lorasChanged?.();
+    return list;
+  }
+  const strengthText = value => number(Math.round(Number(value) * 100) / 100);
+  function renderLoras() {
+    const list = $('#lora-list'); if (!list) return;
+    if (!loras.list) { list.replaceChildren(); return; }
+    list.replaceChildren(...(loras.list.length ? loras.list.map(l => h('li', { class: 'lora-row' },
+      h('div', { class: 'lora-text' }, h('strong', {}, l.name), h('span', { class: 'hint' }, [l.trigger ? t('Words: {words}', { words: l.trigger }) : t('No trigger words'), t('strength {n}', { n: strengthText(l.strength) })].join(' · ')),
+        h('a', { class: 'hint lora-link', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.url.replace(/^https:\/\//, ''))),
+      h('div', { class: 'lora-actions' },
+        h('button', { type: 'button', class: 'btn ghost small', onclick: () => editLora(l) }, t('Edit', { ctx: 'action' })),
+        h('button', { type: 'button', class: 'icon-btn small', 'aria-label': t('Remove {label}', { label: l.name }), title: t('Remove'), onclick: () => removeLora(l) }, icon('trash')))))
+      : [h('li', { class: 'hint' }, t('No LoRAs yet.'))]));
+  }
+  function editLora(l) {
+    loras.editing = l?.id || null;
+    $('#lora-url').value = l?.url || ''; $('#lora-name').value = l?.name || ''; $('#lora-trigger').value = l?.trigger || '';
+    $('#lora-strength').value = String(l?.strength ?? 1); $('#lora-strength-value').textContent = strengthText(l?.strength ?? 1);
+    $('#lora-save').textContent = l ? t('Save LoRA') : t('Add LoRA'); $('#lora-cancel').hidden = !l; $('#lora-error').textContent = '';
+    if (l) $('#lora-url').focus();
+  }
+  async function removeLora(l) {
+    if (!await confirmAction({ title: t('Remove this LoRA?'), message: t('{name} leaves the list. Pictures already made keep it in their details.', { name: l.name }), confirm: t('Remove'), danger: true })) return;
+    try { loras.list = (await api('gpu-lora-delete', { id: l.id })).loras || []; if (loras.editing === l.id) editLora(null); renderLoras(); ctx.lorasChanged?.(); }
+    catch (err) { toast(err.message, { tone: 'error' }); }
+  }
+  $('#lora-strength')?.addEventListener('input', e => { $('#lora-strength-value').textContent = strengthText(e.target.value); });
+  $('#lora-cancel')?.addEventListener('click', () => editLora(null));
+  $('#lora-form')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    const button = $('#lora-save'); button.disabled = true; $('#lora-error').textContent = '';
+    try {
+      loras.list = (await api('gpu-lora', { ...(loras.editing ? { id: loras.editing } : {}), url: $('#lora-url').value.trim(), name: $('#lora-name').value.trim(),
+        trigger: $('#lora-trigger').value.trim(), strength: Number($('#lora-strength').value) })).loras || [];
+      toast(loras.editing ? t('LoRA saved.') : t('LoRA added.'));
+      editLora(null); renderLoras(); ctx.lorasChanged?.();
+    } catch (err) { $('#lora-error').textContent = err.message; }
+    finally { button.disabled = false; }
+  });
+
+  /**
+   * The LoRAs of a request, in the composer or the edit panel: the ones chosen, each with its strength, and a list to add
+   * one from the account's. get() and set(list) read and change the choice ([{ id, strength }]).
+   */
+  function loraPicker(container, { get, set, max = 4 }) {
+    const render = () => {
+      const chosen = get().filter(c => !loras.list || loras.list.some(l => l.id === c.id));
+      const head = h('div', { class: 'field-head' }, h('span', { class: 'field-title' }, 'LoRAs'),
+        h('button', { type: 'button', class: 'link-btn', onclick: () => showSettings('gpu') }, t('Manage')));
+      if (!loras.list) { container.replaceChildren(head, h('p', { class: 'hint' }, t('Loading…'))); loadLoras().catch(() => {}); return; }
+      if (!loras.list.length) { container.replaceChildren(head, h('p', { class: 'hint' }, t('No LoRAs yet. Add them in Settings › GPU with the link of their file on Hugging Face or Civitai.'))); return; }
+      const rows = chosen.map(c => {
+        const l = loras.list.find(x => x.id === c.id);
+        const value = h('output', {}, strengthText(c.strength));
+        const range = h('input', { type: 'range', min: '-2', max: '2', step: '0.05', value: String(c.strength), 'aria-label': t('Strength of {name}', { name: l.name }) });
+        range.addEventListener('input', () => { value.textContent = strengthText(range.value); });
+        range.addEventListener('change', () => set(get().map(x => x.id === c.id ? { ...x, strength: Number(range.value) } : x)));
+        return h('div', { class: 'lora-chosen' }, h('span', { class: 'lora-name', title: l.trigger ? t('Words: {words}', { words: l.trigger }) : l.name }, l.name),
+          h('span', { class: 'range-row' }, range, value),
+          h('button', { type: 'button', class: 'icon-btn tiny', 'aria-label': t('Remove {label}', { label: l.name }), onclick: () => set(get().filter(x => x.id !== c.id)) }, icon('close')));
+      });
+      const left = loras.list.filter(l => !chosen.some(c => c.id === l.id));
+      const add = h('select', { 'aria-label': t('Add a LoRA'), disabled: chosen.length >= max || !left.length },
+        h('option', { value: '' }, chosen.length >= max ? t('Up to {n} LoRAs', { n: max }) : t('Add a LoRA…')), ...left.map(l => h('option', { value: l.id }, l.name)));
+      add.onchange = () => { const l = loras.list.find(x => x.id === add.value); if (l) set([...get(), { id: l.id, strength: l.strength }]); };
+      container.replaceChildren(head, ...rows, add);
+    };
+    render();
+    return render;
   }
 
   // The window that asks for a video -----------------------------------------------------------------------------------
@@ -522,7 +608,8 @@ export function createGpu(ctx) {
   return {
     open, refresh, render, schedule, stop,
     /** The pane of the settings was shown. */
-    showPane: () => { renderPane(); refresh(); schedule(); },
+    showPane: () => { renderPane(); refresh(); schedule(); loadLoras(true).catch(err => toast(err.message, { tone: 'error' })); editLora(null); },
+    loadLoras, loraPicker, loraList: () => loras.list,
     phase: job => videoPhase(job, worker()),
     /** What a video request asked for, as rows of its details (before the seed, the GPU and the time). */
     rows,

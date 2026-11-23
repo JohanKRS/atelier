@@ -36,7 +36,7 @@ await page.locator('#application').waitFor();
 
 // Settings: every pane in English, and the language menu says so.
 await page.locator('#settings-open').click();
-assert.deepEqual(await page.locator('.settings-tab:not([hidden])').allTextContents(), ['API keys', 'Balances', 'Name and password', 'MCP access', 'Video (GPU)', 'About me as a reader', 'Language', 'Users', 'Hosting test', 'Privacy']);
+assert.deepEqual(await page.locator('.settings-tab:not([hidden])').allTextContents(), ['API keys', 'Balances', 'Name and password', 'MCP access', 'GPU', 'About me as a reader', 'Language', 'Users', 'Hosting test', 'Privacy']);
 const leaks = [];
 for (const pane of ['keys', 'balance', 'account', 'mcp', 'gpu', 'about', 'language', 'users', 'host', 'privacy']) {
   await page.locator(`.settings-tab[data-pane=${pane}]`).click();

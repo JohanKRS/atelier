@@ -15,7 +15,7 @@ try {
     if ($secure) header('Strict-Transport-Security: max-age=31536000');
     $vault=new Vault(Studio\privateDirectory($config)); $users=new Users($vault); $auth=new Auth($vault,$users,$config,$secure); $jobs=new Jobs($vault,$config); $stories=new Stories($vault); $writer=new Writer($vault,$stories,$jobs,$config);
     $method=$_SERVER['REQUEST_METHOD'];
-    $reads=['state','gallery','library','captions','albums','image','detail','jobs','history','lineage','preview','users','video','frames','balance','stories','story','story-poll','story-usage','story-review-estimate','reader-about','story-export','story-export-messages','host-test-status','comic-sketch','vn','vn-export','gpu'];
+    $reads=['state','gallery','library','captions','albums','image','detail','jobs','history','lineage','preview','users','video','frames','balance','stories','story','story-poll','story-usage','story-review-estimate','reader-about','story-export','story-export-messages','host-test-status','comic-sketch','vn','vn-export','gpu','gpu-loras'];
     if ($method!== (in_array($action,$reads,true)?'GET':'POST')) throw new HttpError(405,t('Method not allowed.'));
     // A piece of a video upload is raw bytes, not JSON.
     if ($method==='POST') { $auth->checkCsrf(); $input=$action==='video-chunk' ? [] : Studio\input(); }
@@ -336,8 +336,8 @@ try {
         $token=$users->issueToken($auth->user()['id'],$key);
         Studio\json(['token'=>$token,'url'=>Studio\baseUrl($secure).'mcp.php','user'=>Users::summary($users->find($auth->user()['id']))]);
     }
-    // The video worker (a notebook on a GPU, such as Google Colab): its token, shown once, how it is, when it turns itself
-    // off and a request to turn it off now.
+    // The GPU worker (a notebook on a GPU, such as Google Colab): its token, shown once, how it is, when it turns itself
+    // off, a request to turn it off now, and the LoRAs of its image models.
     if (str_starts_with($action,'gpu')) {
         $gpu=new Gpu($vault,$config);
         if ($action==='gpu') Studio\json($gpu->status());
@@ -345,6 +345,10 @@ try {
         if ($action==='gpu-revoke') { $gpu->revokeToken($auth->user()['id']); Studio\json($gpu->status()); }
         if ($action==='gpu-stop') { $gpu->requestStop(); Studio\json($gpu->status()); }
         if ($action==='gpu-idle') { $gpu->setIdleMinutes((int)($input['minutes']??0)); Studio\json($gpu->status()); }
+        // The account's LoRAs for the GPU's image models: listed, added or changed, removed.
+        if ($action==='gpu-loras') Studio\json(['loras'=>$gpu->loras($key)]);
+        if ($action==='gpu-lora') Studio\json(['loras'=>$gpu->saveLora($input,$key)]);
+        if ($action==='gpu-lora-delete') Studio\json(['loras'=>$gpu->deleteLora((string)($input['id']??''),$key)]);
     }
     if ($action==='mcp-revoke') { $users->revokeToken($auth->user()['id']); Studio\json(['user'=>Users::summary($users->find($auth->user()['id']))]); }
     if ($action==='users') { $auth->requireAdmin(); Studio\json(['users'=>$users->all()]); }

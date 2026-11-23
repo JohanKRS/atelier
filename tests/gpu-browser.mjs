@@ -5,7 +5,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// Videos on the GPU in a browser: Settings › Video (GPU), the window that asks for a video, the request in the feed and
+// Videos on the GPU in a browser: Settings › GPU, the window that asks for a video, the request in the feed and
 // the video in the library. The GPU is the worker of colab/ with its test pattern engine (ffmpeg), started here as the
 // notebook would start it. Runs on the instance tests/http_checks.py (or tests/gpu_checks.py) left, with TEST_PASSWORD,
 // served by several PHP processes (PHP_CLI_SERVER_WORKERS): the worker's long poll holds one of them.
@@ -40,7 +40,7 @@ await call('gpu-revoke', {});
 for (const job of (await page.evaluate(async () => (await (await fetch('index.php?action=jobs')).json()).jobs)) || []) if (!['queued', 'running', 'completed'].includes(job.status)) await call('dismiss', { id: job.id });
 await page.reload(); await page.locator('#application').waitFor();
 
-// Settings › Video (GPU): off, without a token; a token shown once with the address.
+// Settings › GPU: off, without a token; a token shown once with the address.
 await page.locator('#settings-open').click();
 await page.locator('.settings-tab[data-pane=gpu]').click();
 await page.locator('#settings-gpu').waitFor();
@@ -202,8 +202,114 @@ await page.locator('#video-from').waitFor();
 const joined = await page.evaluate(async id => (await (await fetch('index.php?action=library')).json()).items.find(r => r[0] === id), continued.image_ids[0]);
 assert.ok(joined, 'the joined video is in the library');
 
+// Pictures with MiniMax H3-Image on the GPU, with LoRAs from Settings › GPU.
+async function madePicture(what, timeout = 60000) {
+  for (const end = Date.now() + timeout; ;) {
+    const job = (await history()).find(j => j.kind === 'image' && j.runner === 'gpu' && j.created >= started && what(j));
+    if (job?.status === 'completed') return job;
+    if (job && !['queued', 'running'].includes(job.status)) throw new Error(`the picture request ended ${job.status}: ${job.error}\n${log.slice(-1500)}`);
+    if (Date.now() > end) throw new Error(`no picture in time\n${log.slice(-1500)}`);
+    await page.waitForTimeout(500);
+  }
+}
+for (const l of (await call('gpu-loras', {})).loras || []) await call('gpu-lora-delete', { id: l.id });
+await page.goto(base); await page.locator('#application').waitFor();
+await page.locator('#gpu-chip').click();
+await page.locator('#settings-gpu').waitFor();
+await page.locator('#lora-card').scrollIntoViewIfNeeded();
+await page.locator('#lora-list li').first().waitFor();
+assert.match(await page.locator('#lora-list').innerText(), /Ainda não há LoRAs/);
+// A link that is not a .safetensors file is refused; a Hugging Face page of the file is turned into its download.
+await page.locator('#lora-url').fill('https://huggingface.co/someone/watercolor/tree/main');
+await page.locator('#lora-save').click();
+await page.waitForFunction(() => document.querySelector('#lora-error').textContent !== '');
+assert.match(await page.locator('#lora-error').innerText(), /Hugging Face/);
+await page.locator('#lora-url').fill('https://huggingface.co/someone/watercolor/blob/main/watercolor_style_v2.safetensors');
+await page.locator('#lora-trigger').fill('wtrclr');
+await page.locator('#lora-strength').fill('0.8');
+await page.locator('#lora-save').click();
+await page.locator('#lora-list .lora-row').first().waitFor();
+assert.match(await page.locator('#lora-list .lora-row').innerText(), /watercolor style v2[\s\S]*Palavras: wtrclr · força 0,8[\s\S]*huggingface\.co\/someone\/watercolor\/resolve\/main\/watercolor_style_v2\.safetensors/);
+await page.locator('#lora-url').fill('https://civitai.com/models/12345/ink?modelVersionId=67890');
+await page.locator('#lora-name').fill('Nanquim');
+await page.locator('#lora-save').click();
+await page.waitForFunction(() => document.querySelectorAll('#lora-list .lora-row').length === 2);
+// Changing one keeps its place.
+await page.locator('#lora-list .lora-row').nth(1).getByRole('button', { name: 'Editar' }).click();
+assert.equal(await page.locator('#lora-save').innerText(), 'Salvar LoRA');
+await page.locator('#lora-strength').fill('0.5');
+await page.locator('#lora-save').click();
+await page.waitForFunction(() => /força 0,5/.test(document.querySelectorAll('#lora-list .lora-row')[1]?.textContent || ''));
+assert.match(await page.locator('#lora-list .lora-row').nth(1).innerText(), /Nanquim[\s\S]*civitai\.com\/api\/download\/models\/67890/);
+await shot('settings-gpu-loras', page.locator('#settings-dialog'));
+await page.keyboard.press('Escape');
+
+// The composer: H3-Image is one more model, with its megapixels, MiniMax's expander and the LoRAs.
+const composerModel = await page.locator('#model').inputValue();
+const wasAdvanced = await page.locator('#advanced-mode').isChecked();
+await page.locator('#advanced-mode').check({ force: true });
+await page.locator('#model').selectOption('minimax-h3-image');
+assert.deepEqual(await page.locator('#quality option').allInnerTexts(), ['Baixa · 4 MP', 'Média · 8 MP', 'Alta · 16 MP']);
+await page.locator('#quality').selectOption('low');
+assert.deepEqual(await page.locator('#thinking option').allTextContents(), ['Desligado', 'Expansor da MiniMax']);
+await page.locator('#thinking').selectOption('medium', { force: true });
+assert.match(await page.locator('#generate-cost').innerText(), /Sem custo de API/);
+assert.ok(await page.locator('#background option[value=transparent]').evaluate(o => o.disabled), 'no transparent background');
+await page.locator('#loras').waitFor();
+assert.deepEqual(await page.locator('#loras select option').allInnerTexts(), ['Adicionar uma LoRA…', 'watercolor style v2', 'Nanquim']);
+await page.locator('#loras select').selectOption({ label: 'watercolor style v2' });
+await page.locator('#loras .lora-chosen').waitFor();
+assert.equal(await page.locator('#loras .lora-chosen input[type=range]').inputValue(), '0.8', 'a LoRA starts at its own strength');
+await page.locator('#loras .lora-chosen input[type=range]').fill('0.6');
+await shot('composer-h3-image', page.locator('.composer'));
+await page.locator('#prompt').fill('Um gato malhado de chapéu vermelho, aquarela');
+const composerCount = await page.locator('#quantity').inputValue();
+await page.locator('#quantity').selectOption('1');
+await page.locator('#generate').click();
+const picture = await madePicture(j => j.operation !== 'edit');
+assert.equal(picture.options.model, 'minimax-h3-image');
+assert.deepEqual(picture.options.loras.map(l => [l.name, l.strength]), [['watercolor style v2', 0.6]], 'the LoRA went with its strength');
+const pictureId = picture.image_ids[0];
+await page.goto(`${base}/#v/${pictureId}`);
+await page.locator('#viewer[open]').waitFor();
+await page.locator('#info-details dt', { hasText: 'LoRAs' }).waitFor();
+const details = await page.locator('#info-details').innerText();
+assert.match(details, /MiniMax H3-Image · GPU/);
+assert.match(details, /Expansor da MiniMax/);
+assert.match(details, /watercolor style v2 \(0,6\)/);
+assert.match(await page.locator('#info-planned').textContent(), /^Expanded \(t2i\)/, 'the expander\'s prompt is shown');
+
+// The edit panel: the same model, with its own LoRAs, makes a new version of the picture.
+await page.locator('#edit-advanced-mode').check({ force: true });
+await page.locator('#edit-model').selectOption('minimax-h3-image');
+await page.locator('#edit-loras').waitFor();
+// Until the panel has its own choice, it starts from the composer's, as for the model.
+await page.locator('#edit-loras .lora-chosen').first().waitFor();
+assert.deepEqual(await page.locator('#edit-loras .lora-name').allInnerTexts(), ['watercolor style v2']);
+await page.locator('#edit-loras .lora-chosen button').click();
+await page.waitForFunction(() => !document.querySelector('#edit-loras .lora-chosen'));
+await page.locator('#edit-loras select').selectOption({ label: 'Nanquim' });
+await page.locator('#edit-loras .lora-chosen').waitFor();
+assert.equal(await page.locator('#edit-loras .lora-chosen input[type=range]').inputValue(), '0.5');
+assert.match(await page.locator('#edit-cost').innerText(), /Sem custo de API/);
+await page.locator('#edit-prompt').fill('Deixe o chapéu azul');
+const editCount = await page.locator('#edit-quantity').inputValue();
+await page.locator('#edit-quantity').selectOption('1');
+await page.locator('#edit-submit').click();
+const edited = await madePicture(j => j.operation === 'edit');
+assert.equal(edited.parent_ids[0], pictureId, 'the edit comes from the picture');
+assert.deepEqual(edited.options.loras.map(l => l.name), ['Nanquim']);
+const version = await page.evaluate(async id => (await (await fetch(`index.php?action=detail&id=${id}`)).json()).image, edited.image_ids[0]);
+assert.equal(version.parent_id, pictureId, 'a new version of the picture');
+await page.locator('#edit-quantity').selectOption(editCount);
+await page.locator('#edit-model').selectOption(composerModel);
+await page.locator('#edit-advanced-mode').setChecked(wasAdvanced, { force: true });
+
 // Turning it off from Atelier.
 await page.goto(base); await page.locator('#application').waitFor();
+await page.locator('#model').selectOption(composerModel, { force: true }).catch(() => {});
+await page.locator('#quantity').selectOption(composerCount).catch(() => {});
+if (!wasAdvanced) await page.locator('#advanced-mode').uncheck({ force: true });
 await page.locator('#gpu-chip').click();
 await page.locator('#settings-gpu').waitFor();
 await page.locator('#gpu-stop').click();

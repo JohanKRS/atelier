@@ -75,7 +75,7 @@ final class Vault
             // character sheets, its comic adaptation (with the adaptation's own bible, plan and sheets) and a visual novel's
             // settings and art like its bible.
             foreach (['jobs'=>['phase'=>'TEXT', 'preview'=>'INTEGER NOT NULL DEFAULT 0', 'user_id'=>'TEXT', 'started'=>'INTEGER', 'worker_lock'=>'INTEGER NOT NULL DEFAULT 0', 'runner'=>'TEXT', 'progress'=>'TEXT'], 'images'=>['user_id'=>'TEXT', 'position'=>'REAL', 'cover'=>'INTEGER NOT NULL DEFAULT 0', 'hidden'=>'INTEGER NOT NULL DEFAULT 0', 'stack'=>'TEXT'],
-                'users'=>['billing'=>'BLOB', 'claude_key'=>'BLOB', 'prefs'=>'BLOB', 'gemini_key'=>'BLOB'], 'albums'=>['library'=>'INTEGER NOT NULL DEFAULT 1'], 'stories'=>['cast'=>'BLOB', 'comic'=>'BLOB', 'vn'=>'BLOB', 'vn_art'=>'BLOB', 'comic_notes'=>'BLOB', 'comic_plan'=>'BLOB', 'comic_cast'=>'BLOB']] as $table => $added) {
+                'users'=>['billing'=>'BLOB', 'claude_key'=>'BLOB', 'prefs'=>'BLOB', 'gemini_key'=>'BLOB'], 'albums'=>['library'=>'INTEGER NOT NULL DEFAULT 1'], 'gpu_workers'=>['loras'=>'BLOB'], 'stories'=>['cast'=>'BLOB', 'comic'=>'BLOB', 'vn'=>'BLOB', 'vn_art'=>'BLOB', 'comic_notes'=>'BLOB', 'comic_plan'=>'BLOB', 'comic_cast'=>'BLOB']] as $table => $added) {
                 $columns = array_column($this->db->query("PRAGMA table_info($table)")->fetchAll(), 'name');
                 foreach ($added as $column => $type) {
                     if (in_array($column, $columns, true)) continue;
@@ -355,6 +355,14 @@ final class Vault
         if (strlen($head) >= 8 && in_array(substr($head, 4, 4), ['ftyp','moov','mdat','free','skip','wide','pnot'], true)) return 'video/mp4';
         return null;
     }
+    /** Format of a picture from its first bytes: PNG, JPEG or WebP. */
+    public static function pictureType(string $head): ?string
+    {
+        if (str_starts_with($head, "\x89PNG\r\n\x1A\n")) return 'image/png';
+        if (str_starts_with($head, "\xFF\xD8\xFF")) return 'image/jpeg';
+        if (str_starts_with($head, 'RIFF') && substr($head, 8, 4) === 'WEBP') return 'image/webp';
+        return null;
+    }
     private static function megabytes(int $bytes): string { return I18n::number($bytes / 1048576).' MB'; }
 
     /** Starts the upload of a video of $size bytes. The id is also the one the video will have in the library. */
@@ -390,7 +398,8 @@ final class Vault
     {
         $size = (int)$this->upload($id)['size']; $count = self::chunkCount($size); $length = strlen($data);
         if ($offset < 0 || $offset % self::VIDEO_CHUNK || $length < 1 || $offset + $length > $size || ($offset + $length < $size && $length % self::VIDEO_CHUNK)) throw new HttpError(422, t('Invalid video piece.'));
-        if ($offset === 0 && self::videoType(substr($data, 0, 16)) === null) throw new HttpError(415, t('Video format not supported. Use MP4, MOV or WebM.'));
+        // A video, or a picture made on the GPU (takeUpload): a picture never becomes a video (finishUpload checks).
+        if ($offset === 0 && self::videoType(substr($data, 0, 16)) === null && self::pictureType(substr($data, 0, 16)) === null) throw new HttpError(415, t('Video format not supported. Use MP4, MOV or WebM.'));
         $handle = @fopen($this->partPath($id), 'c+b');
         if (!$handle) throw new HttpError(404, t('Upload not found.'));
         try {
@@ -444,6 +453,24 @@ final class Vault
         catch (\Throwable $e) { @rename($this->videoPath($id), $part); throw $e; }
         $this->db->prepare('DELETE FROM uploads WHERE id=?')->execute([$id]);
         return $this->video($id, $key);
+    }
+
+    /**
+     * The whole of a complete upload of a picture (one the GPU made): it is saved as a library image (saveImage), not
+     * kept in chunks as a video is, and then its upload removed (abortUpload).
+     */
+    public function readUpload(string $id, string $key): string
+    {
+        $size = (int)$this->upload($id)['size']; $part = $this->partPath($id);
+        clearstatcache(true, $part);
+        if (self::receivedBytes((int)@filesize($part), $size) !== $size) throw new HttpError(409, t('The picture has not fully reached the server yet.'));
+        $handle = @fopen($part, 'rb');
+        if (!$handle) throw new HttpError(404, t('Upload not found.'));
+        $bytes = '';
+        try { for ($index = 0, $count = self::chunkCount($size); $index < $count; $index++) $bytes .= $this->readChunk($handle, $id, $index, $size, $key); }
+        finally { fclose($handle); }
+        if (self::pictureType(substr($bytes, 0, 16)) === null) throw new HttpError(415, t('The GPU sent an invalid picture.'));
+        return $bytes;
     }
 
     public function abortUpload(string $id): void

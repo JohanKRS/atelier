@@ -1,7 +1,7 @@
 import { t, language, locale, number } from './i18n.js';
 // The other modules load with this file's version, so a new upload never mixes old and new code behind a cache.
 const assetVersion = new URL(import.meta.url).search;
-const [{ snap16, frameKind, keptArea, validateFrame, frameTooLarge, resizeFrame, panFrame, sizeFrame, centerFrame, frameView }, { versionNumbers, buildTree, branches, forkDepth, validSize, editSize, aspectOf, upscaleSizes },
+const [{ snap16, frameKind, keptArea, validateFrame, frameTooLarge, resizeFrame, panFrame, sizeFrame, centerFrame, frameView, API_LIMITS, GPU_LIMITS }, { versionNumbers, buildTree, branches, forkDepth, validSize, editSize, aspectOf, upscaleSizes },
   { estimate, usageCost, formatUsd, PRICING_CHECKED, GEMINI_PRICING_CHECKED, isGemini, setAliases, UNKNOWN_IMAGE, balanceNow, formatBalance, planningCost, planningAverage, learnedScale }, { mp4Timing, snapFps, fpsLabel, frameAt, frameTime, frameCount, timecode, megabytes, COMMON_RATES },
   { justify, firstRowAt, monthMarks, railMarks }, { strips }, storyHelpers, { createStories }, readerModule, { createComics, zip }, packModule, { createVn }, { createGpu, aspectRatio }] =
   await Promise.all(['outpaint', 'lineage', 'pricing', 'video', 'library', 'clean', 'story', 'stories', 'reader', 'comics', 'pack', 'vn', 'gpu'].map(name => import(`./${name}.js${assetVersion}`)));
@@ -274,12 +274,14 @@ function confirmAction({ title, message, confirm, danger = false }) {
 
 $$('[data-close]').forEach(b => b.addEventListener('click', () => document.getElementById(b.dataset.close).close()));
 
-// Videos on the GPU worker (gpu.js): the window that asks for one, the GPU's state and the video requests in the feed.
+// The GPU worker (gpu.js): the window that asks for a video, the GPU's state, the LoRAs and the GPU requests in the feed.
 const gpuUi = createGpu({ api, h, icon, toast, confirmAction, trackJob: job => { trackJob(job); schedulePoll(1500); }, newId, $, $$, dateTime, imageUrl, showSettings: pane => showSettings(pane),
   pickImages: (list, max, done, title) => openPicker({ textarea: '#video-prompt', list: () => list, offset: 0, max, base: () => null, render: done, title, mentions: false }),
   pickVideos: (list, max, done, title) => openPicker({ textarea: '#video-prompt', list: () => list, offset: 0, max, base: () => null, render: done, title, mentions: false, kind: 'video' }),
   keys: () => ({ claude: !!state.has_claude_key, openai: !!state.has_key, gemini: !!state.has_gemini_key }), formatUsd,
-  activeJobs: () => [...state.jobs.values()].filter(j => ACTIVE.has(j.status)), prefs: () => state.prefs, savePrefs, changed: () => scheduleRender() });
+  activeJobs: () => [...state.jobs.values()].filter(j => ACTIVE.has(j.status)), prefs: () => state.prefs, savePrefs, changed: () => scheduleRender(),
+  // The account's LoRAs changed (Settings › GPU): the pickers of the composer and the edit panel follow.
+  lorasChanged: () => { if (state.unlocked) renderLoraFields(); } });
 
 // Stories (stories.js): the writer's section, with what it shares of this page.
 const stories = createStories({ api, h, icon, toast, confirmAction, imageUrl, openViewer, trackJob, launchQueued, formatUsd, dateTime, plural, newId, story: storyHelpers, reader: readerModule, createComics, createVn, $,
@@ -511,15 +513,29 @@ function qualities(model) {
   const m = state.models[model];
   // Nano Banana: the quality is how much it thinks before drawing (Pro always thinks a lot: only Alta).
   if (m?.provider === 'gemini') return QUALITY.filter(([v]) => v in (m.qualities || {}));
+  // A model on the account's GPU: the quality is how many megapixels it draws.
+  if (m?.provider === 'gpu') return QUALITY.filter(([v]) => v in (m.qualities || {})).map(([v, label]) => [v, t('{quality} · {n} MP', { quality: label, n: number(m.qualities[v]) })]);
   return m?.extended ? [...QUALITY, ...QUALITY_EXTENDED] : QUALITY;
 }
-/** What a model doesn't have, turned off in a panel's fields: Nano Banana makes no transparent background and no previews. */
+const isGpu = model => state.models?.[model]?.provider === 'gpu';
+/** The sizes a model generates: the image APIs' or, for a model on the account's GPU, its own (outpaint.js). */
+const limitsOf = model => isGpu(model) ? GPU_LIMITS : API_LIMITS;
+/** Whether a request for this model needs the OpenAI key (the GPU's models need the worker token, which the server checks). */
+const needsKey = model => !state.has_key && !isGpu(model);
+/** What a model doesn't have, turned off in a panel's fields: Nano Banana and the GPU's models make no transparent background and no previews. */
 function syncProviderFields(model, { background = null, previews = null, moderation = null } = {}) {
-  const gemini = model?.provider === 'gemini';
+  const gemini = model?.provider === 'gemini', gpu = model?.provider === 'gpu', off = gemini || gpu;
   const transparent = background?.querySelector('option[value=transparent]');
-  if (transparent) transparent.disabled = gemini;
-  if (gemini && background?.value === 'transparent') background.value = 'auto';
-  for (const el of [previews, moderation]) if (el) { el.disabled = gemini; el.title = gemini ? t('Nano Banana does not have this option') : ''; }
+  if (transparent) transparent.disabled = off;
+  if (off && background?.value === 'transparent') background.value = 'auto';
+  for (const el of [previews, moderation]) if (el) { el.disabled = off; el.title = gemini ? t('Nano Banana does not have this option') : gpu ? t('{model} does not have this option', { model: model.label }) : ''; }
+}
+/** Prompt planning: the effort of GPT-6 Sol or Gemini, or for a model on the GPU MiniMax's expander, on or off. */
+const GPU_THINKING = [['off', t('Off')], ['medium', t('MiniMax\'s expander')]];
+function syncThinking(select, model) {
+  const gpu = isGpu(model), previous = select.value;
+  if ((select.dataset.gpu === 'true') !== gpu) { fillSelect(select, gpu ? GPU_THINKING : THINKING, previous); select.dataset.gpu = String(gpu); }
+  if (gpu && previous !== 'off') select.value = 'medium';
 }
 function modelEntries(filter = () => true) { return Object.entries(state.models).filter(([, m]) => filter(m)).map(([id, m]) => [id, m.label]); }
 function syncModelFields(modelSelect, qualitySelect, complexitySelect, fallbackQuality = 'high') {
@@ -595,7 +611,8 @@ const QUALITY_PANELS = {
   edit: { model: '#edit-model', quality: '#edit-quality', complexity: '#edit-complexity', thinking: '#edit-thinking', presets: '#edit-presets', summary: '#edit-preset-summary', apply: () => persistEdit() },
 };
 function presetValues(preset, model) {
-  return { quality: qualities(model).some(([v]) => v === preset.quality) ? preset.quality : 'high', complexity: preset.complexity, thinking: preset.thinking };
+  const thinking = isGpu(model) && preset.thinking !== 'off' ? 'medium' : preset.thinking;
+  return { quality: qualities(model).some(([v]) => v === preset.quality) ? preset.quality : 'high', complexity: preset.complexity, thinking };
 }
 /** The level these options correspond to, or null when they were set by hand. */
 function presetOf(o) {
@@ -610,7 +627,7 @@ function describeOptions(o) {
   const name = (list, value) => (list.find(([v]) => v === value)?.[1] || value).toLowerCase();
   const parts = [model?.label || o.model, t('{level} quality', { level: name([...QUALITY, ...QUALITY_EXTENDED], o.quality) })];
   if (model?.complexity) parts.push(t('{level} complexity', { level: name(COMPLEXITY, o.complexity) }));
-  parts.push(o.thinking === 'off' ? t('no prompt planning') : o.thinking === 'none' ? t('prompt planning without reasoning') : t('prompt planning with {effort} effort', { effort: name(THINKING, o.thinking) }));
+  parts.push(o.thinking === 'off' ? t('no prompt planning') : model?.provider === 'gpu' ? t('prompt planned by MiniMax\'s expander') : o.thinking === 'none' ? t('prompt planning without reasoning') : t('prompt planning with {effort} effort', { effort: name(THINKING, o.thinking) }));
   return parts.join(', ') + '.';
 }
 function panelValues(panel) {
@@ -628,7 +645,7 @@ function renderPresets(panel) {
 }
 function choosePreset(panel, preset) {
   const p = QUALITY_PANELS[panel], v = presetValues(preset, $(p.model).value);
-  $(p.quality).value = v.quality; $(p.complexity).value = v.complexity; $(p.thinking).value = v.thinking;
+  $(p.quality).value = v.quality; $(p.complexity).value = v.complexity; syncThinking($(p.thinking), $(p.model).value); $(p.thinking).value = v.thinking;
   p.apply();
 }
 function setOptionsMode(mode, { save = true } = {}) {
@@ -663,11 +680,18 @@ function updateComposerModel() {
   const model = state.models[$('#model').value]; if (!model) return;
   syncModelFields($('#model'), $('#quality'), $('#complexity'));
   syncProviderFields(model, { background: $('#background'), previews: $('#previews'), moderation: $('#moderation') });
+  syncThinking($('#thinking'), $('#model').value);
+  $('#thinking-hint').textContent = model.provider === 'gpu'
+    ? t('MiniMax\'s prompt expander (from ComfyUI\'s official templates) rewrites the prompt on the GPU before the picture, and chooses its shape when the size is Auto. No cost; it downloads 7 GB more the first time in a session. If it fails, the picture is made with the prompt as written.')
+    : t('Rewrites the prompt before generating: with GPT-6 Sol for the GPT Image models, with Gemini 3.8 Flash for Nano Banana. Extra cost. If it refuses, the image is made with the prompt as written.');
+  renderLoraFields();
   const fixed = ['1:1', '2:3', '3:2', 'auto'];
   $$('.ratio').forEach(b => { b.disabled = !model.flex && !fixed.includes(b.dataset.ratio); });
   if (!model.flex && !fixed.includes(state.ratio)) setRatio('1:1');
   $('#size-note').textContent = model.provider === 'gemini'
     ? t('{model}: comes out at 1K, 2K or 4K depending on the size; an aspect ratio it does not have is cropped from the result. {note}', { model: model.label, note: model.note || '' })
+    : model.provider === 'gpu'
+    ? t('{model}: the quality sets the megapixels and the size the shape (Custom: any size up to 12,000 px per side). With Auto, the prompt expander chooses the shape, or it follows the first reference when it is off. {note}', { model: model.label, note: model.note || '' })
     : model.flex
     ? t('Custom: multiples of 16, aspect ratio up to 3:1 and up to 3,840 px per side. Above 2560 × 1440 the result is experimental.')
     : t('This model only accepts 1:1, 2:3, 3:2 and automatic.');
@@ -751,7 +775,14 @@ const refSize = ref => ref.width ? [ref.width, ref.height] : UNKNOWN_IMAGE;
 /** The planning calls of a request: one per image at the effort chosen, and one for the directions of a varied batch. */
 const planningCalls = (o, varied) => [...(o.thinking !== 'off' ? [o.thinking] : []), ...(varied ? ['variation'] : [])];
 function showCost(selector, spec) {
-  const el = $(selector); const result = spec && estimate(spec);
+  const el = $(selector);
+  if (spec && isGpu(spec.model)) {
+    el.hidden = false;
+    el.textContent = t('No API cost: made on your GPU (Colab).');
+    el.title = t('The GPU\'s time is paid to whoever rents it, such as Colab\'s compute units, while the notebook is on. Varied batches plan their directions with the OpenAI or Gemini key.');
+    return;
+  }
+  const result = spec && estimate(spec);
   el.hidden = !result; if (!result) return;
   const n = spec.n || 1, calls = spec.planning || [];
   // The averages are of GPT-6 Sol's planning: Nano Banana's (Gemini 3.8 Flash) is only mentioned.
@@ -779,9 +810,30 @@ function composerSize() {
   return state.ratio === 'auto' ? 'auto' : state.sizes[state.ratio];
 }
 function composerOptions() {
-  return { model: $('#model').value, size: composerSize(), quality: $('#quality').value, complexity: $('#complexity').value, format: $('#format').value,
+  const model = $('#model').value;
+  return { model, size: composerSize(), quality: $('#quality').value, complexity: $('#complexity').value, format: $('#format').value,
     background: $('#background').value, compression: Number($('#compression').value), n: Number($('#quantity').value), moderation: $('#moderation').value,
-    thinking: $('#thinking').value, previews: Number($('#previews').value), vary: varyForms.composer.mode !== 'same' };
+    thinking: $('#thinking').value, previews: Number($('#previews').value), vary: varyForms.composer.mode !== 'same',
+    ...(isGpu(model) ? { loras: chosenLoras('composer') } : {}) };
+}
+// LoRAs (gpu.js): for a model on the account's GPU, the composer and the edit panel each keep the ones chosen, with
+// their strengths, as [{ id, strength }].
+const loraChoice = { composer: [], edit: [] };
+const loraFields = { composer: { box: '#loras', model: '#model', save: () => persistComposer() }, edit: { box: '#edit-loras', model: '#edit-model', save: () => persistEdit() } };
+const loraCopy = list => (Array.isArray(list) ? list : []).filter(l => typeof l?.id === 'string').map(l => ({ id: l.id, strength: Number(l.strength ?? 1) })).slice(0, 4);
+/** The LoRAs chosen in a panel that are still in the account's list. */
+function chosenLoras(panel) {
+  const known = gpuUi.loraList();
+  return loraChoice[panel].filter(c => !known || known.some(l => l.id === c.id));
+}
+function renderLoraFields() {
+  for (const [panel, f] of Object.entries(loraFields)) {
+    const box = $(f.box), model = state.models[$(f.model).value], show = model?.provider === 'gpu';
+    box.hidden = !show;
+    if (!show) continue;
+    f.render ||= gpuUi.loraPicker(box, { get: () => loraChoice[panel], set: list => { loraChoice[panel] = loraCopy(list); f.render(); f.save(); }, max: model.max_loras || 4 });
+    f.render();
+  }
 }
 function applyOptions(options) {
   const o = { ...DEFAULT_OPTIONS, ...(options || {}) };
@@ -789,7 +841,8 @@ function applyOptions(options) {
   updateComposerModel();
   const set = (selector, value) => { const el = $(selector); if ([...el.options].some(opt => opt.value === String(value))) el.value = String(value); };
   set('#quality', o.quality); set('#complexity', o.complexity); set('#format', o.format); set('#background', o.background);
-  set('#quantity', o.n); set('#moderation', o.moderation); set('#thinking', o.thinking); set('#previews', o.previews);
+  set('#quantity', o.n); set('#moderation', o.moderation); syncThinking($('#thinking'), $('#model').value); set('#thinking', o.thinking); set('#previews', o.previews);
+  loraChoice.composer = loraCopy(o.loras);
   $('#compression').value = o.compression; $('#compression-value').textContent = o.compression;
   varyForms.composer.mode = o.vary === false ? 'same' : 'auto';
   const ratio = Object.keys(state.sizes).find(k => state.sizes[k] === o.size);
@@ -1178,7 +1231,7 @@ $('#picker-group').onchange = () => { picker.group = $('#picker-group').checked;
 
 $('#generate-form').onsubmit = async e => {
   e.preventDefault(); setError('#generate-error');
-  if (!state.has_key) { showSettings(); return; }
+  if (needsKey($('#model').value)) { showSettings(); return; }
   const prompt = $('#prompt').value.trim();
   if (!prompt) { setError('#generate-error', t('Write what you want to generate.')); $('#prompt').focus(); return; }
   const unmatched = mentionError(REF_TARGETS.composer, prompt);
@@ -1187,8 +1240,9 @@ $('#generate-form').onsubmit = async e => {
   const linesError = lines && checkLines(lines);
   if (linesError) { setError('#generate-error', linesError); $('#vary-lines').focus(); return; }
   const options = composerOptions();
-  if (state.ratio === 'custom' && !validSize(Number($('#width').value), Number($('#height').value))) {
-    setError('#generate-error', t('Invalid custom size: use multiples of 16, an aspect ratio up to 3:1, up to 3,840 px per side and between 0.66 and 8.3 megapixels.')); return;
+  if (state.ratio === 'custom' && !validSize(Number($('#width').value), Number($('#height').value), limitsOf(options.model))) {
+    setError('#generate-error', isGpu(options.model) ? t('Invalid custom size: use whole pixels, from 64 to 12,000 per side, up to 40 megapixels and an aspect ratio up to 5:1.')
+      : t('Invalid custom size: use multiples of 16, an aspect ratio up to 3:1, up to 3,840 px per side and between 0.66 and 8.3 megapixels.')); return;
   }
   const button = $('#generate'); button.disabled = true;
   try {
@@ -1427,7 +1481,7 @@ function useJobPrompt(job) {
 
 function phaseText(job) {
   if (job.launchError) return t('Did not start');
-  if (job.kind === 'video') return gpuUi.phase(job);
+  if (job.runner === 'gpu') return gpuUi.phase(job);
   if (job.status === 'queued') {
     const ahead = [...state.jobs.values()].filter(j => j.status === 'queued' && j.created < job.created).length;
     return ahead ? t('Queued · #{n}', { n: ahead + 1 }) : t('Queued');
@@ -1929,6 +1983,15 @@ function videoRows(job) {
   rows.push([t('Request'), dateTime(job.created)]);
   return rows;
 }
+/** How a picture was made on the GPU: its LoRAs, its seed and the GPU that made it, in how long. */
+function gpuPictureRows(o, made = {}) {
+  const rows = [];
+  if (o.loras?.length) rows.push(['LoRAs', o.loras.map(l => `${l.name || t('LoRA no longer in the list')} (${number(Math.round(Number(l.strength ?? 1) * 100) / 100)})`).join(', ')]);
+  const seed = made?.seed ?? o.seed;
+  if (seed !== null && seed !== undefined) rows.push([t('Seed'), String(seed)]);
+  if (made?.gpu) rows.push([t('GPU'), made.seconds ? t('{gpu}, in {time}', { gpu: made.gpu, time: clock(made.seconds) }) : made.gpu]);
+  return rows;
+}
 /** Rebuilds a part only when what it shows changed, so text being selected or copied is never replaced. */
 function rebuild(el, key, build) {
   const shape = JSON.stringify(key);
@@ -2000,9 +2063,10 @@ function renderJobDetails() {
   if (model?.complexity && o.complexity) rows.push([t('Complexity'), COMPLEXITY.find(([v]) => v === o.complexity)?.[1] || o.complexity]);
   rows.push([t('Size'), o.size === 'auto' || !o.size ? t('Automatic', { ctx: 'size' }) : String(o.size).replace('x', ' × ')]);
   if (o.format) rows.push([t('Format'), String(o.format).toUpperCase()]);
-  if (o.thinking && o.thinking !== 'off' && !fixed) rows.push([t('Prompt planning'), THINKING.find(([v]) => v === o.thinking)?.[1] || o.thinking]);
+  if (o.thinking && o.thinking !== 'off' && !fixed) rows.push([t('Prompt planning'), job.runner === 'gpu' ? t('MiniMax\'s expander') : THINKING.find(([v]) => v === o.thinking)?.[1] || o.thinking]);
   if (job.variation) rows.push([t('Variation'), t('{index} of {count}{label}', { index: job.variation.index, count: job.variation.count, label: !job.variation.planned && !job.variation.written && job.variation.label ? `: ${job.variation.label}` : '' })]);
-  rows.push([t('Previews'), o.previews ? String(o.previews) : t('Off', { ctx: 'previews' })]);
+  if (job.runner === 'gpu') rows.push(...gpuPictureRows(o, job.made));
+  else rows.push([t('Previews'), o.previews ? String(o.previews) : t('Off', { ctx: 'previews' })]);
   if (extra && !fixed) rows.push([job.parent_id ? t('Extra references') : t('References'), String(extra)]);
   if (job.has_mask && op === 'edit') rows.push([t('Area'), t('Only the marked area')]);
   if (job.cleaned) rows.push([t('Before sending'), cleanedNote(job.cleaned)]);
@@ -3423,7 +3487,10 @@ function renderInfo() {
     rows.push([t('Model'), model?.label || o.model], [t('Quality'), [...QUALITY, ...QUALITY_EXTENDED].find(([v]) => v === o.quality)?.[1] || o.quality]);
     if (model?.complexity) rows.push([t('Complexity'), COMPLEXITY.find(([v]) => v === o.complexity)?.[1] || o.complexity]);
     rows.push([t('Format'), String(o.format || '').toUpperCase()]);
-    if (o.thinking && o.thinking !== 'off') rows.push([t('Planning'), `${THINKING.find(([v]) => v === o.thinking)?.[1] || o.thinking}${PLANNING_SKIPPED[item.planning_skipped] ? `: ${PLANNING_SKIPPED[item.planning_skipped]}` : ''}`]);
+    const gpu = model?.provider === 'gpu' || !!item.made?.gpu;
+    if (o.thinking && o.thinking !== 'off') rows.push([t('Planning'), gpu ? (item.planning_skipped ? t('MiniMax\'s expander failed, made with the prompt as written') : t('MiniMax\'s expander'))
+      : `${THINKING.find(([v]) => v === o.thinking)?.[1] || o.thinking}${PLANNING_SKIPPED[item.planning_skipped] ? `: ${PLANNING_SKIPPED[item.planning_skipped]}` : ''}`]);
+    if (gpu) rows.push(...gpuPictureRows(o, item.made));
     if (item.variation) rows.push([t('Variation'), t('{index} of {count}{label}', { index: item.variation.index, count: item.variation.count, label: item.variation.planned || item.variation.written ? '' : `: ${item.variation.label}` })]);
     if (item.cleaned) rows.push([t('Before sending'), cleanedNote(item.cleaned)]);
     const tokens = (item.usage?.total_tokens || 0) + (item.planning_usage?.total_tokens || 0) + (item.variation_usage?.total_tokens || 0);
@@ -3474,7 +3541,9 @@ function renderEditPanel() {
   syncProviderFields(state.models[$('#edit-model').value], { previews: $('#edit-previews') });
   $('#edit-quality').value = qualities(model).some(([v]) => v === prefs.quality) ? prefs.quality : 'high';
   $('#edit-quantity').value = String(Math.min(10, prefs.editN || 1));
-  $('#edit-complexity').value = prefs.complexity; $('#edit-previews').value = String(prefs.previews); $('#edit-thinking').value = prefs.thinking;
+  $('#edit-complexity').value = prefs.complexity; $('#edit-previews').value = String(prefs.previews);
+  syncThinking($('#edit-thinking'), model); $('#edit-thinking').value = prefs.thinking; if (!$('#edit-thinking').value) $('#edit-thinking').value = 'off';
+  loraChoice.edit = loraCopy(prefs.loras); renderLoraFields();
   renderCleanBefore();
   // Lines being written stay when another version opens, like the text in the box.
   if (varyForms.edit.mode !== 'lines') varyForms.edit.mode = prefs.vary === false ? 'same' : 'auto';
@@ -3502,9 +3571,12 @@ function updateEditCost() {
 function persistEdit() {
   renderVary('edit'); updateEditCost(); renderPresets('edit');
   savePrefs({ edit: { model: $('#edit-model').value, quality: $('#edit-quality').value, editN: Number($('#edit-quantity').value), complexity: $('#edit-complexity').value,
-    previews: Number($('#edit-previews').value), thinking: $('#edit-thinking').value, vary: varyForms.edit.mode !== 'same' } });
+    previews: Number($('#edit-previews').value), thinking: $('#edit-thinking').value, vary: varyForms.edit.mode !== 'same', loras: loraChoice.edit } });
 }
-$('#edit-model').onchange = () => { syncModelFields($('#edit-model'), $('#edit-quality'), $('#edit-complexity')); syncProviderFields(state.models[$('#edit-model').value], { previews: $('#edit-previews') }); persistEdit(); };
+$('#edit-model').onchange = () => {
+  syncModelFields($('#edit-model'), $('#edit-quality'), $('#edit-complexity')); syncProviderFields(state.models[$('#edit-model').value], { previews: $('#edit-previews') });
+  syncThinking($('#edit-thinking'), $('#edit-model').value); renderLoraFields(); persistEdit();
+};
 for (const s of ['#edit-quality', '#edit-quantity', '#edit-complexity', '#edit-previews', '#edit-thinking']) $(s).addEventListener('change', persistEdit);
 function renderEditRefs() { renderRefList(REF_TARGETS.edit); renderBox(); updateEditCost(); }
 // References only go with a plain edit: adding one goes back to it.
@@ -3515,11 +3587,20 @@ $('#edit-gallery-refs').onclick = () => openPicker(REF_TARGETS.edit);
 acceptDrops($('#edit-drop'), addEditRefs); acceptPaste($('#edit-prompt'), addEditRefs);
 $('#edit-prompt').addEventListener('input', () => { autoGrow($('#edit-prompt')); renderBox(); updateEditCost(); });
 $('#edit-clear').onclick = () => { const box = $('#edit-prompt'); box.value = ''; box.dispatchEvent(new Event('input', { bubbles: true })); if (!box.disabled) box.focus(); };
+/**
+ * The options of a request about an image: its own (format, background…), with what the panel chose. The seed and the
+ * LoRAs of the image are not carried over: a model on the GPU takes the edit panel's LoRAs, and keeps the shape of the
+ * image being changed (Auto).
+ */
+function sourceOptions(item) {
+  const { seed, loras, engine, ...base } = { ...DEFAULT_OPTIONS, ...(item.options || {}) };
+  return base;
+}
 function editOptions(item) {
-  const base = { ...DEFAULT_OPTIONS, ...(item.options || {}) };
-  const model = $('#edit-model').value;
-  return { ...base, model, quality: $('#edit-quality').value, n: Number($('#edit-quantity').value), complexity: $('#edit-complexity').value,
-    previews: Number($('#edit-previews').value), thinking: $('#edit-thinking').value, vary: varyForms.edit.mode !== 'same', size: editSize(item.width, item.height, state.models[model]?.flex) };
+  const model = $('#edit-model').value, gpu = isGpu(model);
+  return { ...sourceOptions(item), model, quality: $('#edit-quality').value, n: Number($('#edit-quantity').value), complexity: $('#edit-complexity').value,
+    previews: Number($('#edit-previews').value), thinking: $('#edit-thinking').value, vary: varyForms.edit.mode !== 'same',
+    size: gpu ? 'auto' : editSize(item.width, item.height, state.models[model]?.flex), ...(gpu ? { loras: chosenLoras('edit') } : {}) };
 }
 $('#edit-clean').onchange = () => setCleanBefore($('#edit-clean').value);
 /**
@@ -3536,8 +3617,9 @@ $('#edit-form').onsubmit = async e => {
   const item = viewer.item, action = viewer.action; if (!item || item.id !== viewer.id) return;
   if ($('#edit-submit').disabled) return;
   if (action === 'clean') { await submitClean($('#edit-submit')); return; }
-  // A crop is made on this device, like Limpar: it needs no API key.
-  if (!state.has_key && !(action === 'expand' && expansionKind() === 'crop')) { showSettings(); return; }
+  // A crop is made on this device, like Limpar: it needs no API key. The GPU's models need the worker token instead.
+  const using = action === 'expand' ? $('#expand-model').value : action === 'upscale' ? $('#upscale-model').value : $('#edit-model').value;
+  if (needsKey(using) && !(action === 'expand' && expansionKind() === 'crop')) { showSettings(); return; }
   if (action) {
     const sent = action === 'upscale' ? await submitUpscale() : action === 'expand' ? await submitExpansion() : await submitPreset(action);
     // Sent: the request stays chosen. The result of Fotorrealista or Melhorar opens when it is ready, and they stay chosen
@@ -3993,7 +4075,7 @@ let expansionDrag = null, newAreaPattern = null;
 const frameOf = e => ({ width: e.width, height: e.height, x: e.x, y: e.y });
 const imageSize = e => [e.image.naturalWidth, e.image.naturalHeight];
 function expansionKind() { const e = viewer.expansion; return e ? frameKind(e.width, e.height, e.x, e.y, ...imageSize(e)) : null; }
-function expansionError() { const e = viewer.expansion; return e ? validateFrame(e.width, e.height, e.x, e.y, ...imageSize(e)) : ''; }
+function expansionError() { const e = viewer.expansion; return e ? validateFrame(e.width, e.height, e.x, e.y, ...imageSize(e), limitsOf($('#expand-model').value)) : ''; }
 function startExpansion() {
   const item = viewer.item; const image = stageImage;
   if (!item || !image.naturalWidth) { viewer.action = null; setMode('view'); return; }
@@ -4011,8 +4093,9 @@ function startExpansion() {
 /** Takes a new frame. One with new areas can't be larger than the image API generates. */
 function takeFrame(frame) {
   const e = viewer.expansion, [iw, ih] = imageSize(e);
-  if (frameKind(frame.width, frame.height, frame.x, frame.y, iw, ih) !== 'crop' && frameTooLarge(frame.width, frame.height) && frame.width * frame.height >= e.width * e.height) {
-    setError('#edit-error', t('With a new area, the canvas cannot go past 3,840 px per side or 8.29 MP.')); return false;
+  const limits = limitsOf($('#expand-model').value);
+  if (frameKind(frame.width, frame.height, frame.x, frame.y, iw, ih) !== 'crop' && frameTooLarge(frame.width, frame.height, limits) && frame.width * frame.height >= e.width * e.height) {
+    setError('#edit-error', limits.gpu ? t('With a new area, the canvas cannot go past 12,000 px per side or 40 MP.') : t('With a new area, the canvas cannot go past 3,840 px per side or 8.29 MP.')); return false;
   }
   Object.assign(e, frame); return true;
 }
@@ -4074,7 +4157,11 @@ function newAreas(context) {
   const g = tile.getContext('2d'); g.fillStyle = '#2a2a30'; g.fillRect(0, 0, 16, 16); g.fillStyle = '#222227'; g.fillRect(0, 0, 8, 8); g.fillRect(8, 8, 8, 8);
   return context.createPattern(tile, 'repeat');
 }
-$('#expand-model').onchange = () => { syncModelFields($('#expand-model'), $('#expand-quality'), null); updateExpandCost(); };
+$('#expand-model').onchange = () => {
+  syncModelFields($('#expand-model'), $('#expand-quality'), null);
+  for (const side of ['#expand-width', '#expand-height']) $(side).max = String(limitsOf($('#expand-model').value).side);
+  updateExpandCost(); renderAction();
+};
 $('#expand-quality').addEventListener('change', () => updateExpandCost());
 function updateExpandCost() {
   const e = viewer.expansion; if (!e) return;
@@ -4145,7 +4232,7 @@ async function submitExpansion() {
   const instructions = boxNotes();
   const model = $('#expand-model').value, quality = $('#expand-quality').value;
   savePrefs({ expand: { model, quality } });
-  const options = { ...DEFAULT_OPTIONS, ...(item.options || {}), model, quality, n: 1, size: `${e.width}x${e.height}`, thinking: 'off', previews: editPrefs().previews };
+  const options = { ...sourceOptions(item), model, quality, n: 1, size: `${e.width}x${e.height}`, thinking: 'off', previews: editPrefs().previews };
   $('#edit-submit').disabled = true;
   try {
     await submitJob({ prompt: EXPAND_PROMPT + (instructions ? ' Instructions for the new areas: ' + instructions : ''), typed: instructions,
@@ -4181,7 +4268,19 @@ async function submitCrop() {
 // Upscale: the same picture recreated at a larger size, as a new version
 function startUpscale() {
   const item = viewer.item; if (!item) { viewer.action = null; setMode('view'); return; }
-  const sizes = upscaleSizes(item.width, item.height);
+  const flexible = modelEntries(m => m.flex);
+  const model = [state.prefs.upscale?.model, item.options?.model].find(id => flexible.some(([f]) => f === id)) || DEFAULT_OPTIONS.model;
+  fillSelect($('#upscale-model'), flexible, model);
+  syncModelFields($('#upscale-model'), $('#upscale-quality'), null, state.prefs.upscale?.quality || 'high');
+  renderUpscaleSizes();
+  setUpscaleWith(upscaleWithPref());
+  updateUpscaleCost();
+}
+/** The larger sizes the chosen model can bring the image to (a model on the GPU goes further than the image APIs). */
+function renderUpscaleSizes() {
+  const item = viewer.item; if (!item) return;
+  const limits = limitsOf($('#upscale-model').value);
+  const sizes = upscaleSizes(item.width, item.height, limits.gpu ? limits : null);
   const preferred = state.prefs.upscale?.scale;
   viewer.upscale = sizes.find(s => s.label === preferred) || sizes.find(s => s.label === '2×') || sizes.at(-1) || null;
   const list = $('#upscale-sizes');
@@ -4193,13 +4292,9 @@ function startUpscale() {
   }));
   const ratio = item.width / item.height;
   $('#upscale-current').textContent = sizes.length ? t('Current: {width} × {height}.', { width: item.width, height: item.height })
-    : ratio > 3 || ratio < 1 / 3 ? t('The API does not generate images with an aspect ratio above 3:1.') : t('This image is already at the largest size the API generates ({width} × {height}).', { width: item.width, height: item.height });
-  const flexible = modelEntries(m => m.flex);
-  const model = [state.prefs.upscale?.model, item.options?.model].find(id => flexible.some(([f]) => f === id)) || DEFAULT_OPTIONS.model;
-  fillSelect($('#upscale-model'), flexible, model);
-  syncModelFields($('#upscale-model'), $('#upscale-quality'), null, state.prefs.upscale?.quality || 'high');
-  setUpscaleWith(upscaleWithPref());
-  updateUpscaleCost();
+    : ratio > limits.ratio || ratio < 1 / limits.ratio ? (limits.gpu ? t('The model does not make images with an aspect ratio above 5:1.') : t('The API does not generate images with an aspect ratio above 3:1.'))
+    : t('This image is already at the largest size the API generates ({width} × {height}).', { width: item.width, height: item.height });
+  renderAction();
 }
 /**
  * What goes along with an upscale: nothing more, the Melhorar cleanup, or the Fotorrealista prompt. Remembered; the
@@ -4215,7 +4310,7 @@ function setUpscaleWith(value) {
   for (const b of $$('#upscale-with button')) b.setAttribute('aria-pressed', String(b.dataset.with === value));
 }
 for (const b of $$('#upscale-with button')) b.onclick = () => { setUpscaleWith(b.dataset.with); renderBox(); updateUpscaleCost(); };
-$('#upscale-model').onchange = () => { syncModelFields($('#upscale-model'), $('#upscale-quality'), null); updateUpscaleCost(); };
+$('#upscale-model').onchange = () => { syncModelFields($('#upscale-model'), $('#upscale-quality'), null); renderUpscaleSizes(); updateUpscaleCost(); };
 $('#upscale-quality').addEventListener('change', () => updateUpscaleCost());
 function updateUpscaleCost() {
   const item = viewer.item, size = viewer.upscale;
@@ -4248,7 +4343,7 @@ async function submitUpscale() {
   const model = $('#upscale-model').value, quality = $('#upscale-quality').value, extra = upscaleWith();
   savePrefs({ upscale: { model, quality, scale: size.label, with: extra } });
   // Same format and background as the source. Planning would rewrite the instruction, so it stays off.
-  const options = { ...DEFAULT_OPTIONS, ...(item.options || {}), format: item.options?.format || FORMAT_OF_MIME[item.mime] || 'png',
+  const options = { ...sourceOptions(item), format: item.options?.format || FORMAT_OF_MIME[item.mime] || 'png',
     model, quality, n: 1, size: `${size.width}x${size.height}`, thinking: 'off', previews: editPrefs().previews };
   $('#edit-submit').disabled = true;
   try {
@@ -5095,7 +5190,8 @@ function balanceStory(b, now) {
  */
 function payersInView() {
   const list = [];
-  if (!WRITING[state.section]) { if (state.models) list.push([imagePayer(composerOptions().model), t('the images of the chosen model')]); }
+  // A model on the account's GPU has no balance to show: its time is paid where the GPU is rented.
+  if (!WRITING[state.section]) { if (state.models && !isGpu($('#model').value)) list.push([imagePayer(composerOptions().model), t('the images of the chosen model')]); }
   else {
     const w = stories.writer, here = stories.story ? t('of this story') : t('of a new story');
     if (w) {
