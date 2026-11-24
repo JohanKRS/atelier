@@ -35,13 +35,16 @@ import urllib.parse
 import urllib.request
 import uuid
 
-VERSION = '1.1'
+VERSION = '1.2'
 USER_AGENT = 'AtelierGpuWorker/' + VERSION
 # The ComfyUI release the workflows below were written and checked against (its MiniMax H3 nodes).
 COMFY_REPO = 'https://github.com/comfyanonymous/ComfyUI'
 COMFY_REF = 'v0.46.0'
 # The longest a single video or picture may take before the worker gives up on it.
 JOB_TIMEOUT = 75 * 60
+# The least GPU memory the models work with (MB): an A100 has 40 or 80 GB, a G4 (RTX PRO 6000 Blackwell) 96 GB. An L4
+# (22 GB) or a T4 (15 GB) can't hold them.
+MIN_GPU_MB = 38000
 
 
 def log(message: str) -> None:
@@ -58,6 +61,20 @@ class Gone(Exception):
 
 class Cancelled(Exception):
     """The owner cancelled the request while it was being made."""
+
+
+class WrongGpu(Exception):
+    """The runtime's GPU is too small for the models (Colab gave another GPU than the A100)."""
+
+
+def gpu_problem(name: str, memory: int) -> str:
+    """What is wrong with the runtime's GPU for the models, or '' when it will do."""
+    if memory >= MIN_GPU_MB:
+        return ''
+    what = f'an {name} with {round(memory / 1024)} GB of GPU memory' if name else 'no GPU'
+    return (f'This runtime has {what}, and MiniMax H3 and H3-Image need an A100 or a G4 (RTX PRO 6000, 96 GB). In Colab '
+            'choose Runtime › Change runtime type › A100 or G4, then Runtime › Run all. If Colab still gives another GPU, '
+            'those are busy: try the other one, or again later.')
 
 
 class ServerError(Exception):
@@ -215,6 +232,15 @@ def gpu_info() -> tuple[str, int, tuple[int, int] | None]:
         return name, int(float(memory)), (int(match[1]), int(match[2])) if match else None
     except Exception:
         return '', 0, None
+
+
+def runs_on(arch: str, archs: list[str]) -> bool:
+    """Whether a PyTorch build with these architectures (torch.cuda.get_arch_list()) runs on a GPU of this one (sm_86…):
+    its own kernels, or PTX of an older one that the driver compiles for it."""
+    if not arch:
+        return True
+    number = lambda name: int(re.sub(r'\D', '', name) or 0)
+    return arch in archs or any(a.startswith('compute_') and number(a) <= number(arch) for a in archs)
 
 
 def in_colab() -> bool:
@@ -391,16 +417,22 @@ class Comfy:
         say('Installing ComfyUI\'s packages')
         sh([sys.executable, '-m', 'pip', 'install', '-q', '-r', os.path.join(self.root, 'requirements.txt'), 'websocket-client'], timeout=1800)
         # The int8 and nvfp4 kernels of comfy-kitchen need a PyTorch built for CUDA 13; with an older one they run slower.
+        # A newer GPU than the PyTorch build knows (a G4's Blackwell, sm_120) needs at least a CUDA 12.8 build to run at all.
         _, _, driver = gpu_info()
-        torch = json.loads(sh([sys.executable, '-c', 'import json,torch;print(json.dumps([torch.__version__, torch.version.cuda]))'],
-                              timeout=300).strip().splitlines()[-1])
-        cuda = tuple(int(x) for x in (torch[1] or '0.0').split('.')[:2])
+        probe = ('import json,torch;c=torch.cuda.get_device_capability() if torch.cuda.is_available() else None;'
+                 'print(json.dumps([torch.__version__,torch.version.cuda,"sm_%d%d"%c if c else "",torch.cuda.get_arch_list() if c else []]))')
+        version, built, arch, archs = json.loads(sh([sys.executable, '-c', probe], timeout=300).strip().splitlines()[-1])
+        cuda = tuple(int(x) for x in (built or '0.0').split('.')[:2])
         if cuda < (13, 0) and driver is not None and driver >= (13, 0):
-            say(f'Updating PyTorch {torch[0]} (CUDA {torch[1]}) to a CUDA 13 build')
+            say(f'Updating PyTorch {version} (CUDA {built}) to a CUDA 13 build')
             sh([sys.executable, '-m', 'pip', 'install', '-q', '--upgrade', 'torch', 'torchvision', 'torchaudio', '--index-url',
                 'https://download.pytorch.org/whl/cu130'], timeout=1800)
+        elif not runs_on(arch, archs) and cuda < (12, 8):
+            say(f'PyTorch {version} (CUDA {built}) has no kernels for this GPU ({arch}): installing a CUDA 12.8 build')
+            sh([sys.executable, '-m', 'pip', 'install', '-q', '--upgrade', 'torch', 'torchvision', 'torchaudio', '--index-url',
+                'https://download.pytorch.org/whl/cu128'], timeout=1800)
         elif cuda < (13, 0):
-            log(f'PyTorch {torch[0]} uses CUDA {torch[1]} and the driver does not support CUDA 13: the quantized models run slower.')
+            log(f'PyTorch {version} uses CUDA {built} and the driver does not support CUDA 13: the quantized models run slower.')
 
     def start(self, say) -> None:
         if self.alive():
@@ -1770,8 +1802,14 @@ class Worker:
         name, memory, _ = gpu_info()
         self.gpu = name or 'CPU'
         self.state.set(gpu=self.gpu, vram=memory or None, engines=sorted(self.engines))
+        # The real models only: the test patterns run anywhere. Checked before installing or downloading anything.
+        problem = gpu_problem(name, memory) if self.comfy is not None else ''
+        if problem:
+            self.state.set(phase='setup', message=problem[:300])
         hello = self.api.call('hello')
         log(f'Connected to Atelier as {hello.get("account")} (worker {VERSION}, {self.gpu}{f", {memory // 1024} GB" if memory else ""}).')
+        if problem:
+            raise WrongGpu(problem)
         self.piece = int(hello.get('piece') or self.piece)
         self.max_bytes = int(hello.get('max_video_bytes') or 0)
         known = set(hello.get('engines') or [])
@@ -1975,6 +2013,8 @@ def run(url: str, token: str, *, comfy_dir: str | None = None, hf_token: str | N
         why = worker.run()
     except Revoked as error:
         why, message = 'revoked', str(error)
+    except WrongGpu as error:
+        why, message = 'gpu', str(error)
     except KeyboardInterrupt:
         why = 'stopped'
     except Exception as error:
@@ -1982,12 +2022,12 @@ def run(url: str, token: str, *, comfy_dir: str | None = None, hf_token: str | N
         traceback.print_exc()
     reasons = {'idle': f'No requests for {api.idle_minutes()} minutes.', 'asked': 'Turned off from Atelier.', 'done': 'Done.',
                'revoked': 'The worker token was revoked.', 'unreachable': 'Atelier did not answer for too long.',
-               'stopped': 'Stopped in the notebook.', 'error': 'Stopped by an error: ' + message}
+               'stopped': 'Stopped in the notebook.', 'gpu': message, 'error': 'Stopped by an error: ' + message}
     log(reasons.get(why, why))
     if why != 'revoked':
         state.set(phase='off', message=reasons.get(why, why)[:300])
         try:
-            api.call('bye', {'reason': reasons.get(why, why)}, attempts=2, timeout=20)
+            api.call('bye', {'reason': reasons.get(why, why), 'why': why}, attempts=2, timeout=20)
         except Exception:
             pass
     if worker.comfy is not None:

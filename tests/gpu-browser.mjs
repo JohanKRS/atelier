@@ -58,6 +58,17 @@ await page.locator('#gpu-idle').selectOption('30');
 await page.waitForFunction(() => document.querySelector('#gpu-idle').value === '30');
 await shot('settings-gpu', page.locator('#settings-dialog'));
 
+// A notebook that got a GPU too small for the models (an L4) turns itself off at once: the pane says why and what to choose.
+const worker_call = (action, data) => page.evaluate(async ([url, token, action, data]) => (await fetch(`${url.replace(/\/$/, '')}/gpu.php?action=${action}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(data) })).status, [url, token, action, data]);
+const small = { gpu: 'NVIDIA L4', vram: 23034, started: Math.floor(Date.now() / 1000) };
+assert.equal(await worker_call('hello', { state: { ...small, phase: 'setup' } }), 200);
+assert.equal(await worker_call('bye', { reason: 'too small', why: 'gpu', state: { ...small, phase: 'off' } }), 200);
+await page.locator('.settings-tab[data-pane=keys]').click();
+await page.locator('.settings-tab[data-pane=gpu]').click();
+await page.waitForFunction(() => document.querySelector('#gpu-detail').classList.contains('warn'), null, { timeout: 10000 });
+assert.match(await page.locator('#gpu-detail').innerText(), /pequena demais para os modelos \(NVIDIA L4 · 22 GB\)[\s\S]*A100 ou G4/);
+assert.equal(await page.locator('#gpu-state').innerText(), 'Desligado');
+
 // The worker, as the notebook runs it: the page sees it on.
 const work = mkdtempSync(join(tmpdir(), 'atelier-gpu-'));
 const worker = spawn('python3', ['colab/atelier_worker.py', '--engine', 'fake', '--keep-runtime'], { cwd: process.cwd(), env: { ...process.env, ATELIER_URL: url, ATELIER_TOKEN: token, HOME: work }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -65,6 +76,7 @@ let log = ''; worker.stdout.on('data', d => { log += d; }); worker.stderr.on('da
 process.on('exit', () => { if (worker.exitCode === null) worker.kill(); });
 await page.waitForFunction(() => /Ligada/.test(document.querySelector('#gpu-state').textContent), null, { timeout: 30000 });
 assert.match(await page.locator('#gpu-detail').innerText(), /Pronta para pedidos|desliga sozinha/i);
+assert.ok(!await page.locator('#gpu-detail').evaluate(el => el.classList.contains('warn')), 'a new session clears the notice');
 assert.ok(await page.locator('#gpu-stop').isVisible(), 'a GPU that is on can be turned off from here');
 await page.keyboard.press('Escape');
 await page.locator('#gpu-chip').waitFor();

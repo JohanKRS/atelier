@@ -608,6 +608,7 @@ details.plain > .stack, details.plain > form { padding-top: 14px; }
 .key-state::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .key-state.ok { color: var(--ok); border-color: rgba(117, 212, 155, .3); background: rgba(117, 212, 155, .08); }
 .key-state.warn { color: var(--warn); border-color: rgba(240, 192, 101, .3); background: var(--warn-soft); }
+#gpu-detail.warn { color: var(--warn); }
 .key-field input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
 .key-field input::placeholder { font-family: var(--font); }
 .key-actions { display: flex; align-items: center; gap: 8px; }

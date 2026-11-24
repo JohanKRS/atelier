@@ -2968,7 +2968,7 @@
  "Turn the GPU off after": "Desligar a GPU depois de",
  "How to turn it on": "Como ligar",
  "Make a token here and copy it.": "Gere um token aqui e copie.",
- "Choose the A100 GPU (Runtime › Change runtime type) and Runtime › Run all. Requests made meanwhile wait in line.": "Escolha a GPU A100 (Ambiente de execução › Alterar o tipo de ambiente de execução) e Ambiente de execução › Executar tudo. Pedidos feitos enquanto isso esperam na fila.",
+ "Choose the A100 or G4 GPU (Runtime › Change runtime type) and Runtime › Run all. Other GPUs, such as the L4, are too small for the models. Requests made meanwhile wait in line.": "Escolha a GPU A100 ou G4 (Ambiente de execução › Alterar o tipo de ambiente de execução) e Ambiente de execução › Executar tudo. Outras GPUs, como a L4, são pequenas demais para os modelos. Pedidos feitos enquanto isso esperam na fila.",
  "In Colab Pro keep the notebook's tab open while you use it. An A100 80 GB uses about 7 to 15 compute units per hour, while it is on.": "No Colab Pro, deixe a aba do notebook aberta enquanto usa. Uma A100 80 GB gasta de 7 a 15 unidades de computação por hora, enquanto está ligada.",
  "New video": "Novo vídeo",
  "Describe the video": "Descreva o vídeo",
@@ -3196,5 +3196,6 @@
  "Add a LoRA": "Adicionar uma LoRA",
  "Up to {n} LoRAs": "Até {n} LoRAs",
  "Add a LoRA…": "Adicionar uma LoRA…",
- "With a new area, the canvas must stay within 12,000 px per side, 40 MP and an aspect ratio up to 5:1.": "Com área nova, a tela precisa respeitar o limite de 12.000 px por lado, 40 MP e proporção de até 5:1."
+ "With a new area, the canvas must stay within 12,000 px per side, 40 MP and an aspect ratio up to 5:1.": "Com área nova, a tela precisa respeitar o limite de 12.000 px por lado, 40 MP e proporção de até 5:1.",
+ "The notebook turned itself off: Colab gave it a GPU too small for the models{gpu}. In Colab choose Runtime › Change runtime type › A100 or G4 and run it again; if it keeps giving another GPU, those are busy, so try the other one or again later.": "O notebook desligou sozinho: o Colab deu a ele uma GPU pequena demais para os modelos{gpu}. No Colab, escolha Ambiente de execução › Alterar o tipo de ambiente de execução › A100 ou G4 e rode de novo; se ele continuar dando outra GPU, essas estão ocupadas, então tente a outra ou mais tarde."
 }

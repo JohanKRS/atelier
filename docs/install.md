@@ -92,7 +92,7 @@ Atelier makes videos with sound and pictures with open models on a GPU you rent 
 
 1. In **Settings › GPU**, press **Make a token**. It's shown once, with the site's address.
 2. Open the notebook ([`colab/atelier_gpu.ipynb`](../colab/atelier_gpu.ipynb), or **Open the notebook in Colab** in the same pane). In **Secrets** (the key on the left) add `ATELIER_URL` and `ATELIER_TOKEN`, with notebook access on. `HF_TOKEN` and `CIVITAI_TOKEN` are only needed for models and LoRAs that ask you to sign in on Hugging Face or Civitai; they stay in Colab and never reach Atelier.
-3. Choose the A100 GPU (**Runtime › Change runtime type**) and **Runtime › Run all**.
+3. Choose the A100 or G4 GPU (**Runtime › Change runtime type**) and **Runtime › Run all**. Smaller GPUs such as the L4 (22 GB) or the T4 can't hold the models: the notebook says so and turns itself off.
 
 The notebook loads the worker (`colab/atelier_worker.py`) from your server, so it always matches your version. The first start installs ComfyUI and downloads the models the waiting requests need (or the latest request's), which takes a few minutes on Colab: about 45 GB for videos (MiniMax H3 at the fast quality) and 47 GB for pictures (MiniMax H3-Image). Everything else downloads the first time a request asks for it in the session: the other video qualities and operations, the prompt expander (7 GB) and each LoRA. Requests made while the GPU is off wait in line; the page shows their progress (download, steps, upload) while the GPU works.
 

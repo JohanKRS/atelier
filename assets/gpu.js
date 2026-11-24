@@ -57,6 +57,8 @@ export function createGpu(ctx) {
   function summary() {
     const w = worker(), s = gpu.status;
     if (!s) return { on: false, text: t('Checking the GPU…') };
+    // The last notebook stopped at once because Colab gave it a smaller GPU than the A100 or G4 the models need.
+    if (!w && s.last?.why === 'gpu') return { on: false, wrong: true, text: t('The notebook turned itself off: Colab gave it a GPU too small for the models{gpu}. In Colab choose Runtime › Change runtime type › A100 or G4 and run it again; if it keeps giving another GPU, those are busy, so try the other one or again later.', { gpu: gpuName(s.last) ? ` (${gpuName(s.last)})` : '' }) };
     if (!w) return { on: false, text: s.token ? t('The GPU is off. Requests wait until you turn it on in Colab.') : t('The GPU is not set up yet. Open Settings › GPU.') };
     const off = w.phase === 'ready' && w.off_at ? t('turns off at {time} without requests', { time: new Date(w.off_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }) : '';
     return { on: true, text: [gpuName(w), phaseLine(w), w.stopping ? t('turning off') : off].filter(Boolean).join(' · ') };
@@ -107,6 +109,7 @@ export function createGpu(ctx) {
     if (status.queued || status.running) lines.push(t('{queued} waiting, {running} being made.', { queued: number(status.queued), running: number(status.running) }));
     if (w?.started) lines.push(t('On since {time}.', { time: dateTime(w.started) }));
     $('#gpu-detail').textContent = lines.filter(Boolean).join(' ');
+    $('#gpu-detail').classList.toggle('warn', !!s.wrong);
     $('#gpu-stop').hidden = !w || !!w.stopping;
     $('#gpu-notebook').href = status.notebook;
     const token = status.token;

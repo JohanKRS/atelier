@@ -876,7 +876,7 @@ from behind, looking at the sea') ?>"></textarea></label>
           <ol>
             <li><?= e('Make a token here and copy it.') ?></li>
             <li><?= e('Open the notebook in Colab. In Secrets (the key on the left), add ATELIER_URL with this site\'s address and ATELIER_TOKEN with the token, with notebook access on. HF_TOKEN and CIVITAI_TOKEN are only for models and LoRAs that ask you to sign in.') ?></li>
-            <li><?= e('Choose the A100 GPU (Runtime › Change runtime type) and Runtime › Run all. Requests made meanwhile wait in line.') ?></li>
+            <li><?= e('Choose the A100 or G4 GPU (Runtime › Change runtime type) and Runtime › Run all. Other GPUs, such as the L4, are too small for the models. Requests made meanwhile wait in line.') ?></li>
           </ol>
           <p class="hint"><?= e('In Colab Pro keep the notebook\'s tab open while you use it. An A100 80 GB uses about 7 to 15 compute units per hour, while it is on.') ?></p>
           <p class="hint" id="gpu-license"></p>
