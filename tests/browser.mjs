@@ -487,6 +487,10 @@ await page.waitForFunction(() => location.hash === '');
 // Configurações: the sections in groups on the left, one at a time, the keys first. The three keys are the same card
 // with the same three buttons, whatever the provider: Remover and Testar need a saved key, Salvar a typed one.
 await page.locator('#settings-open').click();
+// At the top, the version the server runs (the newest one in CHANGELOG.md), linked to its notes on the Releases page.
+const version = (await readFile('CHANGELOG.md', 'utf8')).match(/^## \[(\d+\.\d+\.\d+)\]/m)[1];
+assert.deepEqual(await page.locator('#settings-version').evaluate(a => [a.textContent, a.href, a.target, a.title]),
+  [`Versão ${version}`, `https://github.com/JohanKRS/atelier/releases/tag/v${version}`, '_blank', 'O que mudou nesta versão']);
 assert.deepEqual(await page.locator('.settings-tab:not([hidden])').allTextContents(), ['Chaves de API', 'Saldos', 'Nome e senha', 'Acesso MCP', 'GPU', 'Sobre mim como leitor', 'Idioma', 'Usuários', 'Teste da hospedagem', 'Privacidade']);
 assert.deepEqual(await page.locator('.settings-pane').evaluateAll(panes => panes.filter(p => !p.hidden).map(p => p.id)), ['settings-keys']);
 assert.deepEqual(await page.locator('#settings-keys .key-card').evaluateAll(cards => cards.map(card => [card.querySelector('h4').textContent, ...[...card.querySelectorAll('.key-actions button')].map(b => b.textContent)])),

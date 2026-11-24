@@ -14,7 +14,6 @@ namespace Studio;
 final class Mcp
 {
     public const PROTOCOLS = ['2025-11-25','2025-06-18','2025-03-26','2024-11-05'];
-    public const VERSION = '1.4.1';
     private const LONG_TOOLS = ['generate_image','edit_image','upscale_image'];
     /** Story tools that may wait for a picture still being made (a reference, the previous page), so they are streamed too. */
     private const STORY_WAITS = ['illustrate','character_sheet','set_style','edit_illustration','draw_comic_page','comic_settings','make_sprite','make_background','make_cg','update_art'];
@@ -74,7 +73,7 @@ TEXT;
         return [
             'protocolVersion'=>in_array($requested, self::PROTOCOLS, true) ? $requested : '2025-06-18',
             'capabilities'=>['tools'=>['listChanged'=>false]],
-            'serverInfo'=>['name'=>'atelier','title'=>'Atelier','version'=>self::VERSION],
+            'serverInfo'=>['name'=>'atelier','title'=>'Atelier','version'=>VERSION],
             'instructions'=>'Atelier is a private image library backed by the OpenAI Image API (GPT Image models) and, when the account has a Gemini key, Google\'s Nano Banana models. Every image you generate, edit or upscale is saved '
                 .'to this account\'s library and comes back with its id, a preview and a download link valid for 24 hours (fetch it with any HTTP '
                 .'client to get the full-resolution file). Each image costs the provider\'s credits and usually takes 30 seconds to 3 minutes, so ask for '
