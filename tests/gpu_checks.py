@@ -356,6 +356,26 @@ request('gpu-stop', {})
 run.wait()
 run = Run(token, idle=0.05)
 check(run.wait(30) == 'idle', 'the worker turns off by itself without requests')
+
+# A GPU too small for the models (Colab gave an L4 instead of the A100): it says so and turns off before installing anything.
+check(w.gpu_problem('NVIDIA A100-SXM4-80GB', 81920) == '' and w.gpu_problem('NVIDIA A100-SXM4-40GB', 40960) == '', 'an A100 will do')
+problem = w.gpu_problem('NVIDIA L4', 23034)
+check('NVIDIA L4 with 22 GB' in problem and 'A100' in problem and 'Change runtime type' in problem and 'no GPU' in w.gpu_problem('', 0), 'an L4, or no GPU, is named with what to choose instead')
+real_gpu_info = w.gpu_info
+w.gpu_info = lambda: ('NVIDIA L4', 23034, (12, 4))
+comfy_dir = os.path.join(tempfile.mkdtemp(prefix='atelier-comfy-'), 'ComfyUI')
+try:
+    small = w.run(base, token, comfy_dir=comfy_dir, engine='h3-image', shutdown=False)
+finally:
+    w.gpu_info = real_gpu_info
+check(small == 'gpu' and not os.path.exists(os.path.join(comfy_dir, 'main.py')), 'the worker stops on that GPU, before installing ComfyUI')
+last = request('gpu')[1]
+check(last['worker'] is None and (last['last'] or {}).get('why') == 'gpu' and last['last']['gpu'] == 'NVIDIA L4' and last['last']['vram'] == 23034, 'the page learns why, with the GPU it got')
+run = Run(token)
+until(lambda: (request('gpu')[1]['worker'] or {}).get('phase') == 'ready', 30, 'the worker to be ready')
+check(request('gpu')[1]['last'] is None, 'a new session clears it')
+request('gpu-stop', {})
+run.wait()
 check(request('gpu-idle', {'minutes': 7})[0] == 422 and request('gpu-idle', {'minutes': 30})[1]['idle_minutes'] == 30, 'the idle minutes come from a short list')
 run = Run(token)
 until(lambda: (request('gpu')[1]['worker'] or {}).get('phase') == 'ready', 30, 'the worker to be ready')

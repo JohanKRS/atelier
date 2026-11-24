@@ -119,7 +119,7 @@ try {
         Studio\json(['job'=>$jobs->finishVideo((string)($input['job']??''),(string)($input['upload']??''),$info,(string)($input['poster']??''),$key)]);
     }
     if ($action==='fail') Studio\json(['job'=>$jobs->failVideo((string)($input['job']??''),(string)($input['error']??''),($input['cancelled']??false)===true,$key)]);
-    if ($action==='bye') { $gpu->bye((string)($input['reason']??'')); Studio\json(['ok'=>true]); }
+    if ($action==='bye') { $gpu->bye((string)($input['reason']??''),(string)($input['why']??'')); Studio\json(['ok'=>true]); }
     throw new HttpError(404,t('Route not found.'));
 } catch (Throwable $e) {
     if (!$e instanceof HttpError) Studio\logFailure($e);

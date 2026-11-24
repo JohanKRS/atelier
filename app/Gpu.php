@@ -19,6 +19,8 @@ final class Gpu
 {
     /** Seconds without a sign of life after which the worker counts as off. It speaks every few seconds. */
     public const ALIVE = 45;
+    /** How long the page shows that the last notebook stopped because its GPU was too small (seconds). */
+    public const WRONG_GPU_SHOWN = 6 * 3600;
     /** Seconds a running video may go without a sign of life before it counts as interrupted (the runtime went away). */
     public const STALE = 180;
     /** The notebook, opened in Colab straight from the public repository. */
@@ -203,10 +205,15 @@ final class Gpu
             $worker['off_at'] = is_int($state['idle_since'] ?? null) ? $state['idle_since'] + $idle * 60 : null;
             $worker['stopping'] = $this->stopWanted($row, $state);
         }
+        // The last notebook turned itself off because Colab gave it a GPU too small for the models: the page says so
+        // for a few hours, so whoever started it learns what to change.
+        $last = null;
+        if (!$alive && is_array($state) && ($state['ended'] ?? null) === 'gpu' && $row['seen'] !== null && $now - (int)$row['seen'] <= self::WRONG_GPU_SHOWN)
+            $last = ['why'=>'gpu', 'gpu'=>(string)($state['gpu'] ?? ''), 'vram'=>is_int($state['vram'] ?? null) ? $state['vram'] : null, 'at'=>(int)$row['seen']];
         $q = $this->vault->db->prepare("SELECT status, COUNT(*) AS n FROM jobs WHERE user_id=? AND runner='gpu' AND status IN ('queued','running','cancelling') GROUP BY status");
         $q->execute([$this->vault->owner()]); $counts = array_column($q->fetchAll(), 'n', 'status');
         return ['token'=>$row !== null && $row['token_id'] !== null ? ['created'=>(int)$row['created'], 'used'=>$row['used'] === null ? null : (int)$row['used']] : null,
-            'worker'=>$worker, 'idle_minutes'=>$idle, 'idle_choices'=>self::IDLE_CHOICES, 'queued'=>(int)($counts['queued'] ?? 0),
+            'worker'=>$worker, 'last'=>$last, 'idle_minutes'=>$idle, 'idle_choices'=>self::IDLE_CHOICES, 'queued'=>(int)($counts['queued'] ?? 0),
             'running'=>(int)($counts['running'] ?? 0) + (int)($counts['cancelling'] ?? 0), 'notebook'=>(string)($this->config['video_notebook'] ?? self::NOTEBOOK),
             'engines'=>self::engines(), 'image_engines'=>self::imageEngines(), 'now'=>$now];
     }
@@ -382,11 +389,13 @@ final class Gpu
     }
 
     /** The worker turned its runtime off (idle, asked to, or an error it can't recover from). */
-    public function bye(string $why): void
+    public function bye(string $why, string $code = ''): void
     {
         $row = $this->row(); if ($row === null) return;
         $state = is_string($row['state']) ? (json_decode($row['state'], true) ?: []) : [];
         $state['phase'] = 'off'; $state['message'] = mb_substr($why, 0, 300);
+        // Why it stopped, as a word the page can say in its language (gpu: the runtime's GPU was too small).
+        $state['ended'] = preg_match('/\A[a-z]{1,20}\z/D', $code) ? $code : null;
         $this->vault->db->prepare('UPDATE gpu_workers SET state=?, stop=0 WHERE user_id=?')->execute([json_encode($state, JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE), $this->vault->owner()]);
     }
 }

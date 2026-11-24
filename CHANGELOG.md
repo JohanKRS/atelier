@@ -4,6 +4,14 @@ What changed in each version of Atelier. Versions follow [Semantic Versioning](h
 
 To update an install, replace the app files with the ones from the new zip and keep `config.php`, `data-dir.php` (if present) and the data folder.
 
+## [1.4.1] - 2026-11-24
+
+### Fixes
+
+- The GPU notebook checks the GPU Colab gave it before installing or downloading anything. On one too small for the models, such as an L4 or a T4 (Colab gives them when the A100s are busy, even with the A100 chosen), it says what to choose instead and turns itself off, and **Settings › GPU** shows why.
+- The G4 GPU (RTX PRO 6000 Blackwell, 96 GB) works like the A100: when Colab's PyTorch has no kernels for it, the notebook installs a build that does.
+- Update note: upload `colab/atelier_worker.py` with the rest of the app. The notebook loads it from your server.
+
 ## [1.4.0] - 2026-11-23
 
 ### Pictures on the GPU
@@ -95,6 +103,7 @@ The first public release.
 - English and Brazilian Portuguese.
 - PHP 8.2 or newer with SQLite, no build step. Long requests keep going in the background, or in a separate process (`bin/worker.php`) on hosts that stop web processes early.
 
+[1.4.1]: https://github.com/JohanKRS/atelier/releases/tag/v1.4.1
 [1.4.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.4.0
 [1.3.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.3.0
 [1.2.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.2.0
