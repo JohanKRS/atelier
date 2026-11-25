@@ -253,9 +253,9 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .preset-before { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .expand-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; }
 .expand-line .link-btn { align-self: center; }
-.action-panel .crop-ratios { display: flex; align-self: stretch; }
-.crop-ratios button { flex: 1; justify-content: center; min-width: 0; padding-left: 0; padding-right: 0; font-variant-numeric: tabular-nums; }
-.crop-ratios button:disabled { opacity: .38; }
+/* Livre, Original and the eight proportions: two even rows of five. */
+.action-panel .crop-ratios { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); align-self: stretch; }
+.crop-ratios button { justify-content: center; min-width: 0; padding-left: 0; padding-right: 0; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cost-note { margin: 0; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; cursor: help; }
 .size-options { display: grid; gap: 6px; }
 .size-option { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--bg); color: var(--text-2); font-variant-numeric: tabular-nums; text-align: left; transition: border-color .12s, color .12s, background .12s; }

@@ -4,6 +4,14 @@ What changed in each version of Atelier. Versions follow [Semantic Versioning](h
 
 To update an install, replace the app files with the ones from the new zip and keep `config.php`, `data-dir.php` (if present) and the data folder.
 
+## [1.5.0] - 2026-11-25
+
+### Pictures
+
+- **Expand** has the proportions of **Crop**, to lock the shape of the expansion: Free, Original (the picture's own shape), 1:1, 4:5, 3:4, 2:3, 9:16, 16:9, 4:3 and 3:2. Choosing one gives the frame the smallest size of that shape around the whole picture, with the picture in the middle (a quarter larger all around when the picture already has that shape), and locks it: dragging a corner or a side, the arrow keys, or typing the width or the height keep the shape until **Free** is chosen. A corner holds the opposite corner; a side grows or shrinks the two sides next to it evenly. Dragging the picture places it inside the frame, for example against one side to extend only the other. With new areas the sides are still multiples of 16, so the shape is the closest those sizes allow (within 16 px a side).
+- In **Crop**, a chosen proportion now stays locked the same way: before, dragging a handle after choosing one changed the shape. **Original** keeps the picture's own shape, and the shape is kept to the pixel, inside the picture.
+- With a proportion locked, **Frame on the image** makes the largest frame of that shape inside the picture.
+
 ## [1.4.3] - 2026-11-25
 
 ### MCP
@@ -117,6 +125,7 @@ The first public release.
 - English and Brazilian Portuguese.
 - PHP 8.2 or newer with SQLite, no build step. Long requests keep going in the background, or in a separate process (`bin/worker.php`) on hosts that stop web processes early.
 
+[1.5.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.5.0
 [1.4.3]: https://github.com/JohanKRS/atelier/releases/tag/v1.4.3
 [1.4.2]: https://github.com/JohanKRS/atelier/releases/tag/v1.4.2
 [1.4.1]: https://github.com/JohanKRS/atelier/releases/tag/v1.4.1
