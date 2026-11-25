@@ -131,6 +131,11 @@ const server = JSON.parse(execFileSync('php', ['-r', `require 'app/Presets.php';
   'upscale'=>P::upscale(''),'upscaleNotes'=>P::upscale('face'),'upscaleEnhance'=>P::upscale('face','enhance'),'upscalePhoto'=>P::upscale('','photoreal')]);`], { cwd: new URL('..', import.meta.url) }).toString());
 assert.deepEqual(server, { ...browser });
 console.log('PASS the writer uses the same Fotorrealista, Melhorar and Ampliar instructions as the edit panel');
+// MCP expands and redoes or covers a painted area with the edit panel's own instructions too.
+const panel = vm.runInNewContext(['EXPAND_PROMPT', 'INPAINT_PROMPT', 'COVER_NOTE', 'FILL_PROMPT'].map(grab).join('\n') + '\n;({ expand: EXPAND_PROMPT, inpaint: INPAINT_PROMPT, cover: COVER_NOTE, fill: FILL_PROMPT })');
+const served = JSON.parse(execFileSync('php', ['-r', `require 'app/Presets.php'; use Studio\\Presets as P; echo json_encode(['expand'=>P::EXPAND,'inpaint'=>P::INPAINT,'cover'=>P::COVER_NOTE,'fill'=>P::FILL]);`], { cwd: new URL('..', import.meta.url) }).toString());
+assert.deepEqual(served, { ...panel });
+console.log('PASS MCP uses the same Expandir, Refazer, Cobrir and Preencher instructions as the edit panel');
 
 // The writer marks what can be read before the chapters; the rest of a reply stays hidden while replies are hidden
 assert.deepEqual(spoilerParts('<no_spoilers>Escrevi o capítulo 3. Sigo?</no_spoilers>\n\nNo capítulo, o pai morre.'),

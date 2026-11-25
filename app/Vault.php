@@ -276,7 +276,7 @@ final class Vault
     /** Limpar: how strongly the owner's device cleaned an image. */
     public const CLEAN_LEVELS = ['leve'=>true,'media'=>true,'forte'=>true];
     /** The name of the version a cleaned image becomes. */
-    private static function cleanLabel(string $level): string
+    public static function cleanLabel(string $level): string
     { return match ($level) { 'leve' => t('Light cleanup'), 'forte' => t('Strong cleanup'), default => t('Medium cleanup') }; }
 
     /**
@@ -284,7 +284,7 @@ final class Vault
      * image. Nothing is sent to the image API. It has the size of the image it came from (sides may be swapped: the
      * browser applies the rotation a camera recorded).
      */
-    public function cleanedImage(string $bytes, string $parent, string $level, string $key): array
+    public function cleanedImage(string $bytes, string $parent, string $level, string $key, ?string $album = null, ?string $jobId = null): array
     {
         $from = $this->still($parent, $key);
         if (!isset(self::CLEAN_LEVELS[$level])) throw new HttpError(422, t('Unknown cleaning level.'));
@@ -292,8 +292,9 @@ final class Vault
         $same = $info && (($info[0] === (int)$from['width'] && $info[1] === (int)$from['height']) || ($info[0] === (int)$from['height'] && $info[1] === (int)$from['width']));
         if (!$same) throw new HttpError(422, t('The cleaned image must be the size of the original image.'));
         $label = self::cleanLabel($level);
+        // Cleaned by the server ($jobId: a Limpar request of a client with no page, such as MCP) or on the owner's device.
         return $this->saveImage($bytes, ['title'=>$label,'prompt'=>'','original_prompt'=>'','options'=>null,'parent_ids'=>[$from['id']],'parent_id'=>$from['id'],
-            'operation'=>'clean','label'=>$label,'clean'=>$level], $key);
+            'operation'=>'clean','label'=>$label,'clean'=>$level] + ($jobId !== null ? ['job_id'=>$jobId, 'made_on'=>'server'] : []), $key, $album);
     }
 
     /**
@@ -301,7 +302,7 @@ final class Vault
      * of that image. Nothing is sent to the image API, and the image it came from stays as it is. It is never larger
      * than that image (sides may be swapped: the browser applies the rotation a camera recorded) and never the same size.
      */
-    public function croppedImage(string $bytes, string $parent, string $key): array
+    public function croppedImage(string $bytes, string $parent, string $key, ?string $album = null, bool $server = false): array
     {
         $from = $this->still($parent, $key);
         $info = @getimagesizefromstring($bytes);
@@ -310,8 +311,9 @@ final class Vault
         $fits = ($w <= $fw && $h <= $fh && $w * $h < $fw * $fh) || ($w <= $fh && $h <= $fw && $w * $h < $fw * $fh);
         if (!$fits) throw new HttpError(422, t('The crop must be a part of the original image.'));
         $label = t('Crop to {width} × {height}', ['width'=>$w, 'height'=>$h]);
+        // Cut on the server ($server: for a client with no page, such as MCP) or on the owner's device.
         return $this->saveImage($bytes, ['title'=>$label,'prompt'=>'','original_prompt'=>'','options'=>null,'parent_ids'=>[$from['id']],'parent_id'=>$from['id'],
-            'operation'=>'crop','label'=>$label], $key);
+            'operation'=>'crop','label'=>$label] + ($server ? ['made_on'=>'server'] : []), $key, $album);
     }
 
     /** Where a saved frame came from. A video that isn't in the library (or still uploading) is dropped, the position kept. */
@@ -770,6 +772,19 @@ final class Vault
         $limit = max(1, min(300, $limit));
         $items = array_map(fn($it) => $this->summary($it, $versions[$it['pile']] ?? 0), array_slice($matched, $offset, $limit));
         return ['items'=>$items,'total'=>count($matched),'has_more'=>$offset + count($items) < count($matched)];
+    }
+
+    /**
+     * One page of a library view, as the gallery's entries (summary): for clients that read the library a page at a time
+     * (MCP). $view as view() takes it; hidden items and the items of albums kept out of the library are listed unless the
+     * view says otherwise.
+     * @return array{items:list<array>,total:int,has_more:bool}
+     */
+    public function page(string $key, array $view, int $offset, int $limit): array
+    {
+        [$matched, $versions] = $this->view($key, $view);
+        $items = array_map(fn($it) => $this->summary($it, $versions[$it['pile']] ?? 0), array_slice($matched, max(0, $offset), max(1, min(300, $limit))));
+        return ['items'=>$items, 'total'=>count($matched), 'has_more'=>$offset + count($items) < count($matched)];
     }
 
     /**
@@ -1705,14 +1720,26 @@ final class Vault
     /** @return array{0:array,1:string} the image and its full bytes */
     public function openLink(string $token): array
     {
+        [$item, $key] = $this->linkKey($token);
+        try { return [$item, $this->bytes((string)$item['id'], 'full', $key)]; }
+        finally { sodium_memzero($key); }
+    }
+
+    /**
+     * The item of a download link and the account key it opens (a video is streamed in ranges with it). The caller
+     * wipes the key when done (sodium_memzero).
+     * @return array{0:array,1:string}
+     */
+    public function linkKey(string $token): array
+    {
         if (!preg_match('/\A([a-f0-9]{32})\.([A-Za-z0-9_-]{43})\z/D', $token, $m)) throw new HttpError(404, t('Invalid or expired link.'));
         $q = $this->db->prepare('SELECT * FROM links WHERE id=? AND expires>?'); $q->execute([$m[1], time()]); $link = $q->fetch();
         if (!$link) throw new HttpError(404, t('Invalid or expired link.'));
         try { $key = Crypto::open((string)$link['sealed'], sodium_base642bin($m[2], SODIUM_BASE64_VARIANT_URLSAFE_NO_PADDING), "link:{$m[1]}:{$link['image_id']}"); }
         catch (\Throwable) { throw new HttpError(404, t('Invalid or expired link.')); }
         $this->useOwner((string)$link['user_id']);
-        try { return [$this->image((string)$link['image_id'], $key), $this->bytes((string)$link['image_id'], 'full', $key)]; }
-        finally { sodium_memzero($key); }
+        try { return [$this->image((string)$link['image_id'], $key), $key]; }
+        catch (\Throwable $e) { sodium_memzero($key); throw $e; }
     }
 
     public static function validId(string $id): void

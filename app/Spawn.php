@@ -89,11 +89,11 @@ final class Spawn
      * up to $seconds for its answer: 'claimed' (it took the work), 'idle' (there was nothing for it to take) or
      * 'failed: why'. Null when it said nothing in time.
      */
-    public static function run(string $dir, string $script, array $args, string $secret, float $seconds = 6.0): ?string
+    public static function run(string $dir, string $script, array $args, string $secret, float $seconds = 6.0, bool $jit = false): ?string
     {
         $box = self::box($dir); if ($box === null) return 'failed: '.t('no folder for the answer of the process');
         $word = bin2hex(random_bytes(8));
-        if (!self::start($script, [...$args, $word], $secret)) return 'failed: '.t('the process could not be started');
+        if (!self::start($script, [...$args, $word], $secret, $jit)) return 'failed: '.t('the process could not be started');
         $end = microtime(true) + $seconds;
         do {
             usleep(100000);
@@ -142,12 +142,14 @@ final class Spawn
     /**
      * Starts $script with $args in the background and returns at once. $secret reaches the process through a pipe it
      * reads first, never through the command line or the environment, which other processes could read. False when
-     * nothing could be started.
+     * nothing could be started. $jit turns on PHP's JIT for it where the command line PHP has OPcache (elsewhere nothing
+     * changes): Limpar, which runs on the server for MCP, is about three times faster with it.
      */
-    public static function start(string $script, array $args, string $secret = ''): bool
+    public static function start(string $script, array $args, string $secret = '', bool $jit = false): bool
     {
         if (self::unavailable() !== null) return false;
         $command = [self::php(), '-d', 'max_execution_time=0', '-d', 'display_errors=0', '-d', 'log_errors=1'];
+        if ($jit) array_push($command, '-d', 'opcache.enable_cli=1', '-d', 'opcache.jit=tracing', '-d', 'opcache.jit_buffer_size=64M');
         $memory = (string)ini_get('memory_limit'); if ($memory !== '') array_push($command, '-d', 'memory_limit='.$memory);
         // Its errors go to the same log as the web's.
         $log = (string)ini_get('error_log'); if ($log !== '') array_push($command, '-d', 'error_log='.$log);

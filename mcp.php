@@ -2,7 +2,7 @@
 declare(strict_types=1);
 // Remote MCP endpoint (Streamable HTTP). Authenticated by a per-account token, never by cookies:
 //   POST mcp.php                      Authorization: Bearer <token>   (or mcp.php?token=<token> for clients without headers)
-//   GET  mcp.php?file=<link>          full image from a download link returned by a tool
+//   GET  mcp.php?file=<link>          full image (or video, in byte ranges) from a download link returned by a tool
 require __DIR__.'/app/bootstrap.php';
 use Studio\{Vault,Users,Jobs,Mcp,HttpError};
 // MCP clients are models: they get the app's own words, in English, whatever the browser says.
@@ -23,7 +23,25 @@ try {
     $vault=new Vault(Studio\privateDirectory($config));
 
     if ($method==='GET' && isset($_GET['file'])) {
-        [$item,$bytes]=$vault->openLink((string)$_GET['file']);
+        [$item,$linkKey]=$vault->linkKey((string)$_GET['file']);
+        if (($item['kind']??'image')==='video') {
+            // A video in byte ranges, as the app's player asks for them (index.php?action=video): only the chunks asked for are decrypted.
+            $item=$vault->video((string)$item['id'],$linkKey); $size=(int)$item['size'];
+            try { [$first,$last,$partial]=Studio\byteRange($_SERVER['HTTP_RANGE']??null,$size,$size); }
+            catch (HttpError) { sodium_memzero($linkKey); http_response_code(416); header('Content-Range: bytes */'.$size); exit; }
+            @ini_set('zlib.output_compression','0');
+            while (ob_get_level()>0 && @ob_end_clean());
+            if (function_exists('set_time_limit')) @set_time_limit(0);
+            http_response_code($partial?206:200);
+            header('Content-Type: '.$item['mime']); header('Accept-Ranges: bytes'); header('Content-Length: '.($last-$first+1));
+            if ($partial) header("Content-Range: bytes $first-$last/$size");
+            header('Content-Disposition: attachment; filename="atelier-'.$item['id'].'.'.($item['mime']==='video/webm'?'webm':'mp4').'"');
+            try { $vault->streamVideo($item,$first,$last,$linkKey,static function(string $bytes): bool { echo $bytes; @flush(); return !connection_aborted(); }); }
+            catch (Throwable $e) { Studio\logFailure($e); }
+            finally { sodium_memzero($linkKey); }
+            exit;
+        }
+        try { $bytes=$vault->bytes((string)$item['id'],'full',$linkKey); } finally { sodium_memzero($linkKey); }
         $extension=['image/png'=>'png','image/jpeg'=>'jpg','image/webp'=>'webp'][$item['mime']];
         header('Content-Type: '.$item['mime']); header('Content-Length: '.strlen($bytes));
         header('Content-Disposition: attachment; filename="atelier-'.$item['id'].'.'.$extension.'"');

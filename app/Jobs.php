@@ -29,7 +29,7 @@ final class Jobs
     {
         return match ($phase) {
             'starting' => t('right at the start'), 'varying' => t('while planning the variations'), 'planning' => t('while planning the prompt'),
-            'generating' => t('while waiting for the image'), 'saving' => t('while saving the image'), default => null,
+            'generating' => t('while waiting for the image'), 'cleaning' => t('while cleaning the image'), 'saving' => t('while saving the image'), default => null,
         };
     }
     private const TERMINAL_UNSUCCESSFUL = ['failed','uncertain','cancelled'];
@@ -119,6 +119,15 @@ final class Jobs
         // With an area marked (and in an expansion) what is outside the area comes back as it was sent: asking for the
         // blur to be undone would only make the new part sharper than the rest.
         if ($mask !== null || $operation === 'expand') $cleaned = null;
+        // Limpar antes de enviar from a request that has no page to clean it (MCP): the server cleans the image being
+        // changed right before it goes to the image API (work), at this level. The GPU worker takes the images as they are.
+        $cleanFirst = null;
+        if (isset($input['clean_first']) && $input['clean_first'] !== 'off') {
+            if (!is_string($input['clean_first']) || !isset(Vault::CLEAN_LEVELS[$input['clean_first']])) throw new HttpError(422, t('Unknown cleaning level.'));
+            if ($parent === null || $mask !== null || $operation === 'expand' || $provider === 'gpu' || !$references) throw new HttpError(422, t('Only an edit, Photoreal, Enhance or an upscale of a whole image, made by an image API, can be cleaned before it is sent.'));
+            $cleanFirst = $input['clean_first'];
+            $cleaned = $cleaned === null ? $cleanFirst : self::strongestClean([$cleaned, $cleanFirst]);
+        }
         Images::requireKey($this->vault, $key, $options['model']);
         // An open model on the GPU worker: the request waits in line for it, with what each LoRA chosen is.
         if ($provider === 'gpu') $options['loras'] = (new Gpu($this->vault, $this->config))->resolveLoras($options['loras'], $options['engine'], $key);
@@ -129,6 +138,7 @@ final class Jobs
         // The images also go into this album when they are saved (a story's illustrations go into the story's album).
         if (isset($input['album'])) { Vault::validId((string)$input['album']); if ($this->vault->hasAlbum((string)$input['album'])) $payload['album'] = (string)$input['album']; }
         if ($cleaned !== null) $payload['cleaned'] = $cleaned;
+        if ($cleanFirst !== null) $payload['clean_first'] = $cleanFirst;
         // What the person wrote in the box when the prompt is a ready-made instruction put together with it (Fotorrealista,
         // Melhorar, Ampliar, Expandir): the details offer it to copy apart from the whole prompt. '' means nothing written.
         if (array_key_exists('typed', $input)) {
@@ -158,6 +168,65 @@ final class Jobs
         $order = array_keys(Vault::CLEAN_LEVELS);
         usort($levels, fn($a, $b) => array_search($b, $order, true) <=> array_search($a, $order, true));
         return $levels[0];
+    }
+
+    /**
+     * Limpar as a request of its own, for clients with no page to run it on the device (MCP): the server cleans the image
+     * (Clean, the same filter as the page's) and saves the result as a version of it, as the page's Limpar does. No API
+     * is called and nothing is paid. It runs like any request: in a separate process where the host has one, in the
+     * request feed with its progress, and it can be cancelled.
+     * @return list<array> the request, as create() returns its jobs
+     */
+    public function createClean(string $id, string $imageId, string $level, string $key, ?string $album = null): array
+    {
+        Vault::validId($id);
+        $existing = $this->batch($id, 1, $key); if ($existing) return $existing;
+        if (!isset(Vault::CLEAN_LEVELS[$level])) throw new HttpError(422, t('Unknown cleaning level.'));
+        $source = $this->vault->still($imageId, $key);
+        if ((int)$source['width'] * (int)$source['height'] > Clean::MAX_PIXELS) throw new HttpError(422, t('This image is too large to clean on the server.'));
+        $label = Vault::cleanLabel($level);
+        $payload = ['prompt'=>$label, 'options'=>['clean'=>$level, 'n'=>1], 'references'=>[], 'parent_ids'=>[$source['id']], 'mask'=>null,
+            'parent_id'=>$source['id'], 'operation'=>'clean', 'clean'=>$level, 'label'=>$label, 'image_ids'=>[], 'error'=>null];
+        if ($album !== null) { Vault::validId($album); if ($this->vault->hasAlbum($album)) $payload['album'] = $album; }
+        $this->insert($id, $payload, $key);
+        return [$this->publicJob($this->find($id, $key))];
+    }
+
+    /** Makes a Limpar request this process claimed: the image cleaned, saved as its version, and the request ended. */
+    private function workClean(string $id, array $p, string $key, ?\Closure $keepalive): array
+    {
+        $status = 'completed'; $monitor = $this->monitor($id, $keepalive);
+        try {
+            $source = $this->vault->still((string)$p['parent_id'], $key);
+            if ($monitor('cleaning')) throw new Cancelled();
+            $cleaned = Clean::file($this->vault->bytes($source['id'], 'full', $key), (string)$p['clean'], static function () use ($monitor): void { if ($monitor(null)) throw new Cancelled(); });
+            $this->phase($id, 'saving');
+            $item = $this->vault->cleanedImage($cleaned['bytes'], $source['id'], (string)$p['clean'], $key, is_string($p['album'] ?? null) ? $p['album'] : null, $id);
+            $p['image_ids'][] = $item['id'];
+        } catch (Cancelled) {
+            $status = 'cancelled'; $p['error'] = t('Cancelled.');
+        } catch (\Throwable $e) {
+            if (!$e instanceof HttpError) logFailure($e);
+            $status = 'failed'; $p['error'] = $e instanceof HttpError ? $e->getMessage() : t('Could not clean the image on the server.');
+        }
+        $q = $this->vault->db->prepare('UPDATE jobs SET payload=CAST(? AS BLOB),status=?,phase=NULL,updated=? WHERE id=?');
+        $q->execute([$this->sealPayload($id, $p, $key), $status, time(), $id]);
+        return $this->publicJob($this->find($id, $key));
+    }
+
+    /**
+     * Limpar antes de enviar on the server (clean_first): the image being changed, cleaned right before it is sent. The
+     * request keeps the image as it came; only what goes to the image API is cleaned, as the page does.
+     */
+    private function cleanFirst(string $id, array $p, ?\Closure $keepalive): array
+    {
+        $level = $p['clean_first'] ?? null; $first = $p['references'][0] ?? null;
+        if (!is_string($level) || !isset(Vault::CLEAN_LEVELS[$level]) || !is_string($first) || !preg_match('#\Adata:image/(?:png|jpeg|webp);base64,(.+)\z#s', $first, $m)) return $p;
+        $monitor = $this->monitor($id, $keepalive);
+        if ($monitor('cleaning')) throw new Cancelled();
+        $cleaned = Clean::file((string)base64_decode($m[1], true), $level, static function () use ($monitor): void { if ($monitor(null)) throw new Cancelled(); });
+        $p['references'][0] = 'data:'.$cleaned['mime'].';base64,'.base64_encode($cleaned['bytes']);
+        return $p;
     }
 
     /**
@@ -269,6 +338,8 @@ final class Jobs
             $this->insert($id, $p, $key, 'gpu');
             return [$this->publicJob($this->find($id, $key))];
         }
+        if (($source['payload']['operation'] ?? null) === 'clean')
+            return $this->createClean($id, (string)$source['payload']['parent_id'], (string)($source['payload']['clean'] ?? 'media'), $key, $album ?? (is_string($source['payload']['album'] ?? null) ? $source['payload']['album'] : null));
         $count = $n === null ? (int)($source['payload']['options']['n'] ?? 1) : (int)(filter_var($n, FILTER_VALIDATE_INT) ?: 1);
         $existing = $this->batch($id, $count, $key); if ($existing) return $existing;
         $p = $source['payload'];
@@ -418,7 +489,8 @@ final class Jobs
             // LiteSpeed says how long it lets each PHP process live (Hostinger: 120 s): when the request stopped right there, that's it.
             $limit = Spawn::webLimit();
             if ($limit !== null && $ran !== null && abs($ran - $limit) <= 15) $limits = t('this host\'s web server ends every PHP process at {time}, LSAPI_MAX_PROCESS_TIME', ['time'=>self::duration($limit)]);
-            $charged = self::charged((string)($r['payload']['options']['model'] ?? ''));
+            // Limpar runs on this server: nothing was sent anywhere, so nothing was paid.
+            $charged = ($r['payload']['operation'] ?? null) === 'clean' ? t('Nothing was paid: the cleanup runs on this server. Clean the image again.') : self::charged((string)($r['payload']['options']['model'] ?? ''));
             if (!empty($r['worker_lock'])) {
                 return ($after === null ? t('The server process that was handling this request was stopped.') : t('The server process that was handling this request was stopped {after}.', ['after'=>$after]))
                     .' '.t('This is usually a time limit of the host ({limits}); if it always happens near the same time, that is the limit.', ['limits'=>$limits]).' '.$charged;
@@ -670,7 +742,7 @@ final class Jobs
         if ($job['status'] !== 'queued' || $job['runner'] !== null) return $this->publicJob($job);
         $dir = $this->vault->dir;
         if ($script === null && Spawn::failedRecently($dir)) return null;
-        $said = Spawn::run($dir, $script ?? Spawn::worker(), ['job', $id, $this->vault->owner(), $dir], sodium_bin2hex($key));
+        $said = Spawn::run($dir, $script ?? Spawn::worker(), ['job', $id, $this->vault->owner(), $dir], sodium_bin2hex($key), 6.0, true);
         if ($said === 'claimed' || $said === 'idle') { Spawn::outcome($dir, null); return $this->freshJob($id, $key) ?? $this->publicJob($job); }
         if ($said === null || str_starts_with($said, 'failed')) Spawn::outcome($dir, $said === null ? t('did not answer in 6 s') : substr($said, 8));
         return null;
@@ -684,7 +756,7 @@ final class Jobs
     {
         $dir = $this->vault->dir;
         if (!$ids || ($script === null && Spawn::failedRecently($dir))) return false;
-        $said = Spawn::run($dir, $script ?? Spawn::worker(), ['jobs', $this->vault->owner(), $dir, ...$ids], sodium_bin2hex($key));
+        $said = Spawn::run($dir, $script ?? Spawn::worker(), ['jobs', $this->vault->owner(), $dir, ...$ids], sodium_bin2hex($key), 6.0, true);
         if ($said === 'claimed' || $said === 'idle') { Spawn::outcome($dir, null); return true; }
         if ($said === null || str_starts_with($said, 'failed')) Spawn::outcome($dir, $said === null ? t('did not answer in 6 s') : substr($said, 8));
         return false;
@@ -701,8 +773,10 @@ final class Jobs
     /** Makes the images of a request this process claimed, and ends it. */
     private function work(string $id, array $job, string $key, ?ImageClient $api, ?\Closure $keepalive): array
     {
+        if (($job['payload']['operation'] ?? null) === 'clean') return $this->workClean($id, $job['payload'], $key, $keepalive);
         $p = $job['payload']; $status = 'completed'; $from = null; $kept = false;
         try {
+            if (isset($p['clean_first'])) $p = $this->cleanFirst($id, $p, $keepalive);
             $api ??= Images::client((string)($p['options']['model'] ?? ''), $this->vault, $key, $this->config);
             $from = $api->paidCount();
             if (isset($p['variation']) && !array_key_exists('direction', $p['variation'])) {
