@@ -565,10 +565,12 @@ from behind, looking at the sea') ?>"></textarea></label>
                 <button type="button" id="expand-fit" class="link-btn" title="<?= e('Make the frame the size of the image, to start a crop') ?>"><?= e('Frame on the image') ?></button>
                 <button type="button" id="expand-center" class="link-btn" title="<?= e('Put the image in the middle of the frame') ?>"><?= e('Center') ?></button>
               </div>
-              <fieldset class="field" id="expand-ratio-field" hidden>
+              <fieldset class="field" id="expand-ratio-field">
                 <legend><?= e('Proportion') ?></legend>
                 <div id="expand-ratios" class="segmented small crop-ratios">
-                  <?php foreach (['1:1', '4:5', '3:4', '2:3', '9:16', '16:9', '4:3', '3:2'] as $ratio): ?><button type="button" data-crop="<?= $ratio ?>" aria-pressed="false"><?= $ratio ?></button><?php endforeach ?>
+                  <button type="button" data-crop="free" aria-pressed="true" title="<?= e('No proportion: each handle moves on its own') ?>"><?= e('Free', ['ctx' => 'proportion']) ?></button>
+                  <button type="button" data-crop="original" aria-pressed="false" title="<?= e('Lock the proportion of the image itself') ?>"><?= e('Original', ['ctx' => 'proportion']) ?></button>
+                  <?php foreach (['1:1', '4:5', '3:4', '2:3', '9:16', '16:9', '4:3', '3:2'] as $ratio): ?><button type="button" data-crop="<?= $ratio ?>" aria-pressed="false" title="<?= e('Lock the frame at {ratio}', ['ratio' => $ratio]) ?>"><?= $ratio ?></button><?php endforeach ?>
                 </div>
               </fieldset>
               <p id="expand-dimensions" class="hint" aria-live="polite"></p>

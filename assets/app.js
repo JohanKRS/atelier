@@ -1,7 +1,7 @@
 import { t, language, locale, number } from './i18n.js';
 // The other modules load with this file's version, so a new upload never mixes old and new code behind a cache.
 const assetVersion = new URL(import.meta.url).search;
-const [{ snap16, frameKind, keptArea, validateFrame, frameTooLarge, resizeFrame, panFrame, sizeFrame, centerFrame, ratioFrame, hasRatio, resizeCrop, holdCrop, frameView, API_LIMITS, GPU_LIMITS }, { versionNumbers, buildTree, branches, forkDepth, validSize, editSize, aspectOf, upscaleSizes },
+const [{ snap16, frameKind, keptArea, validateFrame, frameTooLarge, resizeFrame, panFrame, sizeFrame, centerFrame, ratioFrame, aroundFrame, resizeCrop, resizeLocked, lockedSize, holdCrop, frameView, API_LIMITS, GPU_LIMITS }, { versionNumbers, buildTree, branches, forkDepth, validSize, editSize, aspectOf, upscaleSizes },
   { estimate, usageCost, formatUsd, PRICING_CHECKED, GEMINI_PRICING_CHECKED, isGemini, setAliases, UNKNOWN_IMAGE, balanceNow, formatBalance, planningCost, planningAverage, learnedScale }, { mp4Timing, snapFps, fpsLabel, frameAt, frameTime, frameCount, timecode, megabytes, COMMON_RATES },
   { justify, firstRowAt, monthMarks, railMarks }, { strips }, storyHelpers, { createStories }, readerModule, { createComics, zip }, packModule, { createVn }, { createGpu, aspectRatio }] =
   await Promise.all(['outpaint', 'lineage', 'pricing', 'video', 'library', 'clean', 'story', 'stories', 'reader', 'comics', 'pack', 'vn', 'gpu'].map(name => import(`./${name}.js${assetVersion}`)));
@@ -3907,12 +3907,12 @@ const ACTIONS = {
   // Recortar: a frame inside the image keeps only a part of it, made on this device. The cropped image opens, to be
   // edited or expanded from there (an expansion then never sees what was cut off).
   crop: { tile: '#crop-open', local: true, icon: 'crop', title: t('Crop', { ctx: 'action' }), go: t('Crop', { ctx: 'action' }), quality: false, quantity: false,
-    hint: t('Keep only a part of the image: pull the frame\'s handles or pick a proportion, and drag the image to place it. Made on this device, at no cost; the cropped image opens as a new version, ready to edit or expand.'),
+    hint: t('Keep only a part of the image: pull the frame\'s handles or pick a proportion, which locks its shape, and drag the image to place it. Made on this device, at no cost; the cropped image opens as a new version, ready to edit or expand.'),
     placeholder: t('A crop does not use text'), empty: '', filled: t('A crop does not use the text in the box.') },
   // The frame crops, extends, or both (outpaint.js): the button and what the text does follow what the frame is doing.
   expand: { tile: '#expand-open', icon: 'expand', title: t('Crop and expand'), quality: false, quantity: false,
     go: () => ({ crop: t('Crop', { ctx: 'action' }), both: t('Crop and expand') })[expansionKind()] || t('Expand'),
-    hint: t('Pull the frame\'s handles: inward crops, outward enlarges the canvas. Drag the image to position it.'),
+    hint: t('Pull the frame\'s handles: inward crops, outward enlarges the canvas. A proportion locks its shape. Drag the image to position it.'),
     placeholder: t('What should appear in the new areas (optional). Left blank, the scene continues.'),
     empty: '',
     filled: () => (expansionKind() === 'crop' ? t('A crop does not use the text in the box.') : t('The text in the box says what should appear in the new areas.')) },
@@ -4151,8 +4151,8 @@ function startExpansion() {
   // image. Recortar starts on the whole image.
   let frame = centerFrame({ width: snap16(iw * 1.25), height: snap16(ih * 1.25), x: 0, y: 0 }, iw, ih);
   if (crop || validateFrame(frame.width, frame.height, frame.x, frame.y, iw, ih)) frame = { width: iw, height: ih, x: 0, y: 0 };
-  viewer.expansion = { image, ...frame, crop, view: null, tween: 0 };
-  $('#expand-ratio-field').hidden = !crop;
+  // No proportion is locked when a tool opens: the handles move freely until one is chosen.
+  viewer.expansion = { image, ...frame, crop, lock: null, view: null, tween: 0 };
   for (const id of ['#expand-width', '#expand-height']) $(id).step = crop ? 1 : 16;
   const flexible = modelEntries(m => m.flex);
   const preferred = state.prefs.expand?.model || item.options?.model;
@@ -4205,13 +4205,8 @@ function renderExpansion() {
   $('#expand-width').value = e.width; $('#expand-height').value = e.height;
   $('#expand-dimensions').textContent = (e.crop ? CROP_STATUS : FRAME_STATUS)[kind];
   $('#expand-engine').hidden = e.crop || kind === 'crop';
-  // The proportion the frame has right now, among those that crop with one tap.
-  const [iw, ih] = imageSize(e);
-  for (const b of $$('#expand-ratios button')) {
-    const [rw, rh] = b.dataset.crop.split(':').map(Number), to = ratioFrame(iw, ih, rw, rh);
-    b.setAttribute('aria-pressed', String(kind === 'crop' && hasRatio(e.width, e.height, rw, rh)));
-    b.disabled = frameKind(to.width, to.height, to.x, to.y, iw, ih) === 'same';
-  }
+  // The locked proportion, or Livre.
+  for (const b of $$('#expand-ratios button')) b.setAttribute('aria-pressed', String(b.dataset.crop === (e.lock?.key || 'free')));
   // A frame at the size of the image is where a crop starts from, not a mistake: the line above says what to do.
   setError('#edit-error', kind === 'same' ? '' : error); $('#edit-submit').disabled = !!error;
   renderBox(); updateExpandCost();
@@ -4255,18 +4250,35 @@ for (const id of ['expand-width', 'expand-height']) $('#' + id).onchange = () =>
   const e = viewer.expansion; if (!e) return;
   const w = Number($('#expand-width').value), hh = Number($('#expand-height').value);
   if (!Number.isInteger(w) || !Number.isInteger(hh) || w < 16 || hh < 16) { setError('#edit-error', t('Use whole dimensions, from 16 px up.')); $('#edit-submit').disabled = true; return; }
-  const [iw, ih] = imageSize(e);
-  if (takeFrame(e.crop ? holdCrop({ ...frameOf(e), width: w, height: hh }, 0, 0, iw, ih) : sizeFrame(frameOf(e), w, hh, iw, ih))) fitExpansion(false); else $('#edit-submit').disabled = true;
+  const [iw, ih] = imageSize(e), side = id === 'expand-width' ? 'width' : 'height';
+  // With a proportion locked, the other side follows the one typed.
+  const frame = e.lock ? lockedSize(frameOf(e), side, side === 'width' ? w : hh, iw, ih, e.lock.rw, e.lock.rh, e.crop)
+    : e.crop ? holdCrop({ ...frameOf(e), width: w, height: hh }, 0, 0, iw, ih) : sizeFrame(frameOf(e), w, hh, iw, ih);
+  if (takeFrame(frame)) fitExpansion(false); else $('#edit-submit').disabled = true;
 };
 $('#expand-center').onclick = () => { const e = viewer.expansion; if (!e) return; Object.assign(e, centerFrame(frameOf(e), ...imageSize(e))); fitExpansion(true); };
-// A proportion: the largest frame of that shape in the middle of the image, a crop. Dragging the image moves it.
+// A proportion locks the frame's shape: the handles and the typed sizes keep it until Livre. Chosen, it gives the
+// frame that shape: in Recortar the largest one in the middle of the image, in Expandir the smallest one around the
+// whole image (a quarter larger when the image already has it). Dragging the image moves it under the frame.
+/** The proportion of a button: [width, height], the image's own for Original, or null for Livre. */
+function ratioOf(key, e) {
+  if (key === 'free') return null;
+  if (key !== 'original') return key.split(':').map(Number);
+  const [iw, ih] = imageSize(e), gcd = (a, b) => (b ? gcd(b, a % b) : a), d = gcd(iw, ih);
+  return [iw / d, ih / d];
+}
 for (const b of $$('#expand-ratios button')) b.onclick = () => {
   const e = viewer.expansion; if (!e) return;
-  const [rw, rh] = b.dataset.crop.split(':').map(Number);
-  Object.assign(e, ratioFrame(...imageSize(e), rw, rh)); fitExpansion(true);
+  const ratio = ratioOf(b.dataset.crop, e);
+  e.lock = ratio && { key: b.dataset.crop, rw: ratio[0], rh: ratio[1] };
+  if (!ratio) { renderExpansion(); return; }
+  Object.assign(e, (e.crop ? ratioFrame : aroundFrame)(...imageSize(e), ...ratio)); fitExpansion(true);
 };
-// The frame at the size of the image: where a crop starts from.
-$('#expand-fit').onclick = () => { const e = viewer.expansion; if (!e) return; const [iw, ih] = imageSize(e); Object.assign(e, { width: iw, height: ih, x: 0, y: 0 }); fitExpansion(true); };
+// The frame at the size of the image, where a crop starts from; with a proportion locked, the largest frame of it in the image.
+$('#expand-fit').onclick = () => {
+  const e = viewer.expansion; if (!e) return; const [iw, ih] = imageSize(e);
+  Object.assign(e, e.lock ? ratioFrame(iw, ih, e.lock.rw, e.lock.rh) : { width: iw, height: ih, x: 0, y: 0 }); fitExpansion(true);
+};
 function beginFrameDrag(type, ev) {
   const e = viewer.expansion; cancelAnimationFrame(e.tween);
   expansionDrag = { type, startX: ev.clientX, startY: ev.clientY, frame: frameOf(e), view: { ...e.view }, imageX: e.view.x + e.x * e.view.scale, imageY: e.view.y + e.y * e.view.scale };
@@ -4276,8 +4288,9 @@ function frameDragged(ev) {
   const d = expansionDrag, e = viewer.expansion; if (!d || !e) return;
   ev.preventDefault();
   const [iw, ih] = imageSize(e), scale = d.view.scale, dx = (ev.clientX - d.startX) / scale, dy = (ev.clientY - d.startY) / scale, magnet = 8 / scale;
-  const frame = e.crop ? (d.type === 'move' ? holdCrop(d.frame, dx, dy, iw, ih) : resizeCrop(d.frame, d.type, dx, dy, iw, ih, magnet))
-    : d.type === 'move' ? panFrame(d.frame, dx, dy, iw, ih, magnet) : resizeFrame(d.frame, d.type, dx, dy, iw, ih, magnet);
+  const frame = d.type === 'move' ? (e.crop ? holdCrop(d.frame, dx, dy, iw, ih) : panFrame(d.frame, dx, dy, iw, ih, magnet))
+    : e.lock ? resizeLocked(d.frame, d.type, dx, dy, iw, ih, e.lock.rw, e.lock.rh, e.crop, magnet)
+    : (e.crop ? resizeCrop : resizeFrame)(d.frame, d.type, dx, dy, iw, ih, magnet);
   if (!takeFrame(frame)) return;
   // A handle moves the frame over the image, which stays where it is; dragging the image moves it under the frame.
   e.view = d.type === 'move' ? { ...d.view } : { scale, x: d.imageX - e.x * scale, y: d.imageY - e.y * scale };
@@ -4298,7 +4311,10 @@ $$('#expand-frame [data-corner]').forEach(handle => {
     if (!e || !move) return;
     ev.preventDefault(); ev.stopPropagation();
     const by = ev.shiftKey ? 1 : 16;
-    if (takeFrame((e.crop ? resizeCrop : resizeFrame)(frameOf(e), handle.dataset.corner, move[0] * by, move[1] * by, ...imageSize(e)))) fitExpansion(false);
+    const [iw, ih] = imageSize(e), [dx, dy] = [move[0] * by, move[1] * by];
+    const frame = e.lock ? resizeLocked(frameOf(e), handle.dataset.corner, dx, dy, iw, ih, e.lock.rw, e.lock.rh, e.crop)
+      : (e.crop ? resizeCrop : resizeFrame)(frameOf(e), handle.dataset.corner, dx, dy, iw, ih);
+    if (takeFrame(frame)) fitExpansion(false);
   };
 });
 expandCanvas.onpointerdown = ev => { if (!viewer.expansion || ev.button) return; ev.preventDefault(); expandCanvas.setPointerCapture(ev.pointerId); beginFrameDrag('move', ev); };
