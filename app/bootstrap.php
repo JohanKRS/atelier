@@ -7,7 +7,7 @@ final class HttpError extends \RuntimeException
 { public function __construct(public readonly int $status, string $message, public readonly ?string $kind=null) { parent::__construct($message); } }
 
 /** The app's version: the newest one in CHANGELOG.md, changed with each release. Settings shows it, and MCP clients get it. */
-const VERSION = '1.4.2';
+const VERSION = '1.4.3';
 
 require_once __DIR__.'/I18n.php';
 require_once __DIR__.'/Crypto.php';
@@ -79,6 +79,15 @@ function baseUrl(bool $secure): string
     $host=(string)($_SERVER['HTTP_HOST']??$_SERVER['SERVER_NAME']??'localhost');
     if (!preg_match('/\A[A-Za-z0-9.\-\[\]:]{1,255}\z/D',$host)) $host='localhost';
     return ($secure?'https':'http').'://'.$host.rtrim(str_replace('\\','/',dirname($_SERVER['SCRIPT_NAME']??'/index.php')),'/').'/';
+}
+/** Changes whenever an icon or the manifest changes, so browsers and MCP clients that keep icons fetch the new one. */
+function iconVersion(): string
+{
+    static $version=null;
+    if ($version!==null) return $version;
+    $stamp='';
+    foreach (array_merge(glob(__DIR__.'/../assets/*.png') ?: [], glob(__DIR__.'/../assets/*.svg') ?: [], glob(__DIR__.'/../assets/*.webmanifest') ?: []) as $file) $stamp.=basename($file).':'.@filemtime($file).':'.@filesize($file).'|';
+    return $version=substr(md5($stamp),0,10);
 }
 function privateDirectory(array $config): string
 {

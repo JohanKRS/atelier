@@ -20,9 +20,11 @@ DirectoryIndex index.php
   <FilesMatch "\.(js|css|json)$">
     Header set Cache-Control "no-cache"
   </FilesMatch>
-  # Same for the icons and the app manifest, so a new icon replaces the old one on the next visit.
+  # Same for the icons and the app manifest, so a new icon replaces the old one on the next visit. The logo is public, so
+  # the services that show a site's icon (where Claude gets a connector's) may use it.
   <FilesMatch "^(icon(-[0-9a-z]+)*\.(svg|png)|apple-touch-icon\.png|favicon\.ico|manifest\.webmanifest)$">
     Header set Cache-Control "no-cache"
+    Header always unset X-Robots-Tag
   </FilesMatch>
 </IfModule>
 # LiteSpeed: keep only the long requests alive if the client or a proxy disconnects, and lift their connection

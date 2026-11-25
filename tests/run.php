@@ -505,6 +505,13 @@ try{
   $init=$rpc('initialize',['protocolVersion'=>'2025-06-18','capabilities'=>new stdClass(),'clientInfo'=>['name'=>'test','version'=>'1']]);
   check($init['result']['protocolVersion']==='2025-06-18'&&isset($init['result']['capabilities']['tools'])&&$init['result']['serverInfo']['name']==='atelier'&&$init['result']['serverInfo']['version']===Studio\VERSION,'MCP initialize answers with the requested protocol and the app\'s version');
   check($rpc('initialize',['protocolVersion'=>'1999-01-01'])['result']['protocolVersion']==='2025-06-18','unknown protocol versions get a supported one');
+  // The logo for the client to show next to the connector: the app's PNGs at their public address, same origin as the server.
+  $info=$init['result']['serverInfo'];$icons=$info['icons']??[];
+  check(count($icons)===2&&str_starts_with($icons[0]['src'],'https://example.test/studio/assets/icon-512.png?v='.Studio\iconVersion())&&str_starts_with($icons[1]['src'],'https://example.test/studio/assets/icon-192.png?v=')
+    &&$icons[0]['mimeType']==='image/png'&&!isset($icons[0]['sizes'])&&$info['websiteUrl']==='https://example.test/studio/'&&$info['title']==='Atelier'&&$info['description']!=='','MCP initialize gives the logo, a description and the app\'s address');
+  foreach ([512,192] as $side) { $size=getimagesize(__DIR__.'/../assets/icon-'.$side.'.png'); check($size[0]===$side&&$size[1]===$side&&$size['mime']==='image/png',"the {$side} px logo MCP points to is a {$side} px PNG"); }
+  $newest=$rpc('initialize',['protocolVersion'=>'2025-11-25'])['result'];
+  check($newest['protocolVersion']==='2025-11-25'&&array_column($newest['serverInfo']['icons'],'sizes')===[['512x512'],['192x192']],'clients on MCP 2025-11-25 also get the icons\' sizes, as a list');
   check($mcp->handle(['jsonrpc'=>'2.0','method'=>'notifications/initialized'])===null&&$rpc('nope')['error']['code']===-32601&&$mcp->handle(['id'=>1])['error']['code']===-32600,'notifications get no answer; unknown methods and invalid messages get JSON-RPC errors');
   $names=array_column($rpc('tools/list')['result']['tools'],'name');
   check(array_slice($names,0,7)===['generate_image','edit_image','upscale_image','list_images','get_image','import_image','check_requests']&&in_array('write_chapter',$names,true),'MCP lists the image tools, then the stories');

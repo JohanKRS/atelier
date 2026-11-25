@@ -18,6 +18,29 @@ try {
     // The version that Settings shows and MCP clients get is the newest one in CHANGELOG.md: each release changes both.
     preg_match('/^## \[(\d+\.\d+\.\d+)\]/m',(string)file_get_contents(dirname(__DIR__).'/CHANGELOG.md'),$newest);
     check(($newest[1]??null)===Studio\VERSION,'the app\'s version is the newest one in CHANGELOG.md');
+    // robots.txt read the way Google reads it (the most specific group, then the longest rule, Allow on a tie): every crawler
+    // stays out, except Google's favicon fetch, which reads the home page (Googlebot) and the icon files (Googlebot-Image).
+    $groups=[];$open=false;
+    foreach (preg_split('/\R/',(string)file_get_contents(dirname(__DIR__).'/robots.txt')) as $line) {
+        if (!preg_match('/^\s*([A-Za-z-]+)\s*:\s*(\S*)/',$line,$m)) continue;
+        if (strcasecmp($m[1],'user-agent')===0) { if (!$open) $groups[]=['agents'=>[],'rules'=>[]]; $groups[array_key_last($groups)]['agents'][]=strtolower($m[2]); $open=true; continue; }
+        $open=false; if ($groups && in_array(strtolower($m[1]),['allow','disallow'],true)) $groups[array_key_last($groups)]['rules'][]=[strtolower($m[1])==='allow',$m[2]];
+    }
+    $crawls=static function(string $agent,string $path) use ($groups): bool {
+        $chosen=null; foreach ($groups as $g) if (in_array(strtolower($agent),$g['agents'],true)) $chosen=$g;
+        if (!$chosen) foreach ($groups as $g) if (in_array('*',$g['agents'],true)) $chosen=$g;
+        $best=null;
+        foreach ($chosen['rules']??[] as [$allow,$pattern]) {
+            if ($pattern==='') continue;
+            $regex='#^'.str_replace(['\\*','\\$'],['.*','$'],preg_quote($pattern,'#')).'#';
+            if (preg_match($regex,$path) && ($best===null || strlen($pattern)>strlen($best[1]) || (strlen($pattern)===strlen($best[1]) && $allow))) $best=[$allow,$pattern];
+        }
+        return $best===null || $best[0];
+    };
+    check(!$crawls('Bingbot','/') && !$crawls('GPTBot','/assets/icon-512.png') && !$crawls('Googlebot','/mcp.php') && !$crawls('Googlebot','/?token=x')
+        && !$crawls('Googlebot','/index.php') && !$crawls('Googlebot-Image','/') && !$crawls('Googlebot-Image','/assets/app.js'),'robots.txt keeps crawlers out of the app');
+    check($crawls('Googlebot','/') && $crawls('Googlebot-Image','/favicon.ico') && $crawls('Googlebot-Image','/assets/icon-512.png?v=1') && $crawls('Googlebot-Image','/assets/icon.svg')
+        && $crawls('Googlebot-Image','/assets/apple-touch-icon.png'),'robots.txt lets Google read the sign-in page and the logo, for favicon services');
     file_put_contents($dir.'/config.php',"<?php return ['setup_token'=>'installation-token-test-only','session_minutes'=>30];");
     $c=Studio\configuration($dir);
     check($c['setup_token']==='installation-token-test-only' && $c['session_minutes']===30 && $c['require_https'],'renamed example configuration loads without template dependency');
