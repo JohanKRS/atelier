@@ -4,6 +4,14 @@ What changed in each version of Atelier. Versions follow [Semantic Versioning](h
 
 To update an install, replace the app files with the ones from the new zip and keep `config.php`, `data-dir.php` (if present) and the data folder.
 
+## [1.4.3] - 2026-11-25
+
+### MCP
+
+- The MCP server sends Atelier's logo when a client connects (`icons` in `serverInfo`, from MCP 2025-11-25: the 512 and 192 px PNGs, served by your own site), with a short description and the app's address, so clients that show a server's own icon can show it next to the connector.
+- Claude (claude.ai and its apps) doesn't use a server's icon yet. The icon it shows is the site's favicon, which, as far as can be seen, it gets from Google's favicon service for the domain (on a subdomain, sometimes the main domain's). Atelier's `robots.txt` kept every crawler out, Google's too, so Google had no favicon for it. Now Googlebot may read the sign-in page, which still asks not to be indexed, and the icon files, and nothing else. The page also lists a 192 px icon, for services that want a larger one.
+- Update note: upload `robots.txt` and `.htaccess` with the rest of the app. A connector that already exists may keep its old icon for a while: in Claude until Google refreshes it, and in other clients until the connector is removed and added again.
+
 ## [1.4.2] - 2026-11-24
 
 ### Settings
@@ -109,6 +117,7 @@ The first public release.
 - English and Brazilian Portuguese.
 - PHP 8.2 or newer with SQLite, no build step. Long requests keep going in the background, or in a separate process (`bin/worker.php`) on hosts that stop web processes early.
 
+[1.4.3]: https://github.com/JohanKRS/atelier/releases/tag/v1.4.3
 [1.4.2]: https://github.com/JohanKRS/atelier/releases/tag/v1.4.2
 [1.4.1]: https://github.com/JohanKRS/atelier/releases/tag/v1.4.1
 [1.4.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.4.0

@@ -70,10 +70,11 @@ TEXT;
     private function initialize(array $params): array
     {
         $requested = (string)($params['protocolVersion'] ?? '');
+        $protocol = in_array($requested, self::PROTOCOLS, true) ? $requested : '2025-06-18';
         return [
-            'protocolVersion'=>in_array($requested, self::PROTOCOLS, true) ? $requested : '2025-06-18',
+            'protocolVersion'=>$protocol,
             'capabilities'=>['tools'=>['listChanged'=>false]],
-            'serverInfo'=>['name'=>'atelier','title'=>'Atelier','version'=>VERSION],
+            'serverInfo'=>self::serverInfo($this->baseUrl, $protocol),
             'instructions'=>'Atelier is a private image library backed by the OpenAI Image API (GPT Image models) and, when the account has a Gemini key, Google\'s Nano Banana models. Every image you generate, edit or upscale is saved '
                 .'to this account\'s library and comes back with its id, a preview and a download link valid for 24 hours (fetch it with any HTTP '
                 .'client to get the full-resolution file). Each image costs the provider\'s credits and usually takes 30 seconds to 3 minutes, so ask for '
@@ -84,6 +85,23 @@ TEXT;
                 .'can be worked on with the same tools the app\'s own writer uses: find the story with list_stories (or start one with create_story), then call open_story before anything else: '
                 .'it gives the writer\'s instructions, the story as it is now and an opened value, and every story tool takes the story_id and that opened value (they refuse without it).',
         ];
+    }
+
+    /**
+     * Who the server is, with the app's logo for the client to show next to the connector (MCP 2025-11-25). The icons
+     * are the app's own PNGs at their public address on this site (same origin, no sign-in), with the icon version so
+     * a client that keeps icons fetches a new one. "sizes" is a list since 2025-11-25 and a single string in clients
+     * written for the draft before it, so only clients that ask for 2025-11-25 get it.
+     */
+    public static function serverInfo(string $baseUrl, string $protocol): array
+    {
+        $listsSizes = strcmp($protocol, '2025-11-25') >= 0;
+        $icons = [];
+        foreach ([512, 192] as $side)
+            $icons[] = ['src'=>$baseUrl.'assets/icon-'.$side.'.png?v='.iconVersion(), 'mimeType'=>'image/png'] + ($listsSizes ? ['sizes'=>[$side.'x'.$side]] : []);
+        return ['name'=>'atelier', 'title'=>'Atelier', 'version'=>VERSION,
+            'description'=>'A private studio for pictures and stories made with AI.',
+            'icons'=>$icons, 'websiteUrl'=>$baseUrl];
     }
 
     public static function tools(): array

@@ -26,12 +26,11 @@ $assetStamp = '';
 foreach (array_merge(glob(__DIR__.'/../assets/*.js') ?: [], glob(__DIR__.'/../assets/*.css') ?: []) as $assetFile) $assetStamp .= basename($assetFile).':'.@filemtime($assetFile).':'.@filesize($assetFile).'|';
 $assetVersion = substr(md5($assetStamp), 0, 10);
 // Browsers keep favicons for a long time; a new icon gets a new address.
-$iconStamp = '';
-foreach (array_merge(glob(__DIR__.'/../assets/*.png') ?: [], glob(__DIR__.'/../assets/*.svg') ?: [], glob(__DIR__.'/../assets/*.webmanifest') ?: []) as $iconFile) $iconStamp .= basename($iconFile).':'.@filemtime($iconFile).':'.@filesize($iconFile).'|';
-$iconVersion = substr(md5($iconStamp), 0, 10);
+$iconVersion = Studio\iconVersion();
 ?>
   <link rel="icon" href="assets/icon.svg?v=<?= $iconVersion ?>" type="image/svg+xml">
   <link rel="icon" href="assets/icon-32.png?v=<?= $iconVersion ?>" sizes="32x32" type="image/png">
+  <link rel="icon" href="assets/icon-192.png?v=<?= $iconVersion ?>" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png?v=<?= $iconVersion ?>">
   <link rel="manifest" href="assets/manifest.webmanifest?v=<?= $iconVersion ?>">
   <link rel="stylesheet" href="assets/style.css?v=<?= $assetVersion ?>"><script src="assets/language.js?v=<?= $assetVersion ?>" defer></script><script type="module" src="assets/app.js?v=<?= $assetVersion ?>"></script>

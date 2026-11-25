@@ -107,6 +107,10 @@ def rpc(method, params=None, id=1, **kw):
     return code, json.loads(raw), headers
 code, body, headers=rpc('initialize',{'protocolVersion':'2025-06-18','capabilities':{},'clientInfo':{'name':'checks','version':'1'}})
 check(code==200 and body['result']['serverInfo']['name']=='atelier' and 'application/json' in headers['Content-Type'],'MCP initialize over HTTP')
+icon=body['result']['serverInfo']['icons'][0]['src']
+check(icon.startswith(base+'/assets/icon-512.png?v='),'MCP gives the logo at the address the server answers on')
+icon_response=urllib.request.urlopen(urllib.request.Request(icon))
+check(icon_response.status==200 and icon_response.headers['Content-Type']=='image/png' and icon_response.read()[:8]==b'\x89PNG\r\n\x1a\n','the MCP logo opens without a token or a session')
 check(mcp({'jsonrpc':'2.0','method':'notifications/initialized'})[0]==202,'MCP notifications are accepted without a body')
 code, body, headers=rpc('tools/list', auth=None)
 check(code==401 and 'Bearer' in headers.get('WWW-Authenticate',''),'MCP requires a token')

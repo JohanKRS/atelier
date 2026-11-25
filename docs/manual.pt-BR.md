@@ -216,6 +216,8 @@ O token aparece uma única vez, em dois formatos:
 - **Claude Code e clientes que aceitam cabeçalhos:** `claude mcp add --transport http atelier https://seu-site/…/mcp.php --header "Authorization: Bearer …"` (com `-s user` vale em qualquer pasta). Assim o token não aparece no endereço nem nos logs de acesso.
 - **Outros clientes:** o ChatGPT aceita servidores MCP próprios no modo desenvolvedor, na web (o endereço com o token), e pede confirmação a cada ferramenta que muda algo. O Codex e o Gemini CLI aceitam o endereço com o cabeçalho, cada um no seu arquivo de configuração.
 
+**Ícone do conector:** o servidor manda o logo do Atelier quando o cliente se conecta (`icons` no `serverInfo`), e os clientes que mostram o ícone do próprio servidor usam esse. O Claude ainda não: mostra o favicon do site, que ao que tudo indica ele pega no serviço de favicons do Google para o domínio (num subdomínio, às vezes o do domínio principal). Por isso o `robots.txt` deixa o Google ler a página de entrada, que continua pedindo para não ser indexada, e os arquivos do ícone. O Google atualiza os favicons no tempo dele, então numa instalação nova o logo pode demorar a aparecer no Claude.
+
 Os conectores do claude.ai valem também no Claude Desktop e no app do celular. Usando o cliente com a assinatura dele (Claude, ChatGPT, Gemini), o texto das histórias sai da assinatura, não dos créditos da API; as imagens continuam pela chave da API do usuário.
 
 Ferramentas oferecidas:

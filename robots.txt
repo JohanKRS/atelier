@@ -1,2 +1,15 @@
+# The app is private: no search engine reads it. The one exception is the logo, so that Google's favicon service
+# (where Claude, among others, gets the icon it shows for a connector) can find it: Googlebot may read the sign-in
+# page, which still says noindex, only for its icon links, and Googlebot-Image may read the icons.
 User-agent: *
+Disallow: /
+
+User-agent: Googlebot
+Allow: /$
+Disallow: /
+
+User-agent: Googlebot-Image
+Allow: /favicon.ico
+Allow: /assets/icon
+Allow: /assets/apple-touch-icon.png
 Disallow: /
