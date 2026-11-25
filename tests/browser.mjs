@@ -1998,6 +1998,63 @@ assert.equal(await page.locator('#stage-meta').textContent(), `${side} × ${side
 assert.notEqual(new URL(page.url()).hash.slice(3), expanded, 'the cropped image is open');
 assert.deepEqual([await page.locator('#action-panel').isHidden(), await page.locator('#crop-open').getAttribute('aria-pressed'), await page.locator('#edit-prompt').isDisabled()], [true, 'false', false], 'the crop is done: the image is ready to be edited');
 assert.equal(await page.locator('#versions-list .vnode.current .vsub').textContent(), `Recorte para ${side} × ${side}`);
+// A proportion locks the frame's shape, in Expandir as in Recortar: the handles and the typed sizes keep it until
+// Livre. In Expandir it starts as the smallest frame of that shape around the whole image, with sides in multiples of
+// 16 (so the shape is within 16 px of exact); Original is the image's own shape, a quarter larger all around.
+const near = (f, rw, rh, by = 16) => Math.abs(f.width * rh - f.height * rw) <= by * Math.max(rw, rh);
+const pressedRatio = () => page.locator('#expand-ratios [aria-pressed="true"]').textContent();
+await page.locator('#expand-open').click();
+await page.locator('#expand-options').waitFor();
+assert.deepEqual([await page.locator('#expand-ratio-field').isVisible(), await page.locator('#expand-ratios button').count(), await pressedRatio()], [true, 10, 'Livre'], 'Expandir has the proportions of Recortar, and starts free');
+await page.locator('#expand-ratios [data-crop="16:9"]').click();
+await page.waitForTimeout(250);
+frame = await frameState();
+assert.ok(near(frame, 16, 9) && frame.width % 16 === 0 && frame.height % 16 === 0 && frame.width >= side && frame.height >= side, `16:9 around the whole image (${frame.width} × ${frame.height})`);
+assert.deepEqual([await pressedRatio(), frame.go, frame.off, frame.says], ['16:9', 'Expandir', false, 'A área quadriculada é gerada.']);
+await shot('expand-ratio-desktop.png');
+let before = frame;
+await dragHandle('se', 140, 10);
+frame = await frameState();
+assert.ok(frame.width > before.width && near(frame, 16, 9), `a corner keeps 16:9 (${frame.width} × ${frame.height})`);
+before = frame;
+await dragHandle('e', -90, 0);
+frame = await frameState();
+assert.ok(frame.width < before.width && frame.height < before.height && near(frame, 16, 9), `a side keeps 16:9 (${frame.width} × ${frame.height})`);
+await page.locator('#expand-width').fill('2048'); await page.locator('#expand-width').blur();
+frame = await frameState();
+assert.deepEqual([frame.width, frame.height, await pressedRatio()], [2048, 1152, '16:9'], 'a typed side takes the other with it');
+await page.locator('#expand-ratios [data-crop="free"]').click();
+assert.equal(await pressedRatio(), 'Livre');
+await dragHandle('e', 100, 0);
+assert.deepEqual([(await frameState()).height, (await frameState()).width > 2048], [1152, true], 'Livre: a side moves on its own');
+await page.locator('#expand-ratios [data-crop="original"]').click();
+await page.waitForTimeout(250);
+frame = await frameState();
+assert.deepEqual([frame.width, frame.height, frame.width > side, await pressedRatio()], [frame.height, frame.height, true, 'Original'], 'Original: the image\'s own shape, larger all around');
+await dragHandle('n', 0, -70);
+frame = await frameState();
+assert.equal(frame.width, frame.height, 'a side keeps the image\'s own shape');
+await page.keyboard.press('Escape');
+assert.equal(await page.locator('#action-panel').isHidden(), true);
+// Recortar: the proportion stays while its handles are dragged and its sizes typed, to the pixel and inside the image.
+await page.locator('#crop-open').click();
+await page.locator('#expand-options').waitFor();
+assert.equal(await pressedRatio(), 'Livre', 'each tool starts free');
+await page.locator('#expand-ratios [data-crop="16:9"]').click();
+await page.waitForTimeout(250);
+before = await frameState();
+assert.deepEqual([before.width, near(before, 16, 9, 1)], [side, true]);
+await dragHandle('sw', 90, 0);
+frame = await frameState();
+assert.ok(frame.width < before.width && frame.height < before.height && near(frame, 16, 9, 1), `a corner keeps 16:9 (${frame.width} × ${frame.height})`);
+await dragHandle('e', 400, 0);
+frame = await frameState();
+assert.ok(frame.width <= side && near(frame, 16, 9, 1), `pulled outward, it stops at the image (${frame.width} × ${frame.height})`);
+await page.locator('#expand-width').fill('400'); await page.locator('#expand-width').blur();
+frame = await frameState();
+assert.deepEqual([frame.width, frame.height, frame.go, frame.off], [400, 225, 'Recortar', false]);
+await page.keyboard.press('Escape');
+assert.deepEqual(await overPicture(), [true, true, true, true, true]);
 // Cobrir: the painted area goes erased, so the model can't see what was there. Without text it is filled with what
 // surrounds it; with text, it is drawn from the text. On the picture a covered area is solid, not a veil.
 const beforeCover = new URL(page.url()).hash.slice(3);

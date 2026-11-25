@@ -1,6 +1,6 @@
 import './i18n-setup.mjs';
 import assert from 'node:assert/strict';
-import { snap16, frameKind, keptArea, validateFrame, frameTooLarge, resizeFrame, panFrame, sizeFrame, centerFrame, ratioFrame, hasRatio, resizeCrop, holdCrop, frameView } from '../assets/outpaint.js';
+import { snap16, frameKind, keptArea, validateFrame, frameTooLarge, resizeFrame, panFrame, sizeFrame, centerFrame, ratioFrame, hasRatio, resizeCrop, holdCrop, frameView, aroundFrame, resizeLocked, lockedSize } from '../assets/outpaint.js';
 
 assert.equal(snap16(1539), 1536);
 const IW = 1536, IH = 1152;
@@ -101,10 +101,51 @@ for (const [h, dx, dy] of [['nw', 700, 500], ['ne', -900, 30], ['s', 0, 2000], [
   const f = resizeCrop(crop, h, dx, dy, IW, IH);
   assert.ok(['crop', 'same'].includes(frameKind(f.width, f.height, f.x, f.y, IW, IH)), `${h} stays inside the image`);
 }
+// A locked proportion. In Expandir it starts as the smallest frame of that shape around the whole image, in the middle,
+// with sides in multiples of 16; a shape the image already has is a quarter larger all around.
+assert.deepEqual(aroundFrame(1024, 1024, 16, 9), { width: 1824, height: 1024, x: 400, y: 0 });
+assert.deepEqual(aroundFrame(1024, 1024, 9, 16), { width: 1024, height: 1824, x: 0, y: 400 });
+assert.deepEqual(aroundFrame(IW, IH, 4, 3), { width: 1920, height: 1440, x: 192, y: 144 }, 'the image\'s own shape');
+assert.deepEqual(aroundFrame(1000, 777, 1, 1), { width: 1008, height: 1008, x: 4, y: 115 }, 'a side that is not a multiple of 16 is held whole');
+for (const [rw, rh] of [[1, 1], [4, 5], [3, 4], [2, 3], [9, 16], [16, 9], [4, 3], [3, 2], [1000, 777]]) {
+  const f = aroundFrame(1000, 777, rw, rh);
+  assert.ok(Math.abs(f.width * rh - f.height * rw) <= 16 * Math.max(rw, rh), `${rw}:${rh} is within 16 px of its shape`);
+  assert.equal(frameKind(f.width, f.height, f.x, f.y, 1000, 777), 'expand', `${rw}:${rh} holds the whole image`);
+  assert.equal(validateFrame(f.width, f.height, f.x, f.y, 1000, 777), '');
+}
+// Dragged with the proportion locked: a corner holds the opposite one, a side grows evenly on the two next to it.
+const wide = aroundFrame(1024, 1024, 16, 9), shape = (f, rw, rh, by = 16) => Math.abs(f.width * rh - f.height * rw) <= by * Math.max(rw, rh);
+assert.deepEqual(resizeLocked(wide, 'se', 100, 10, 1024, 1024, 16, 9), { width: 1920, height: 1088, x: 400, y: 0 });
+assert.deepEqual(resizeLocked(wide, 'e', 160, 0, 1024, 1024, 16, 9), { width: 1984, height: 1120, x: 400, y: 48 });
+assert.deepEqual(resizeLocked(wide, 'n', 0, -90, 1024, 1024, 16, 9), { width: 1984, height: 1120, x: 480, y: 96 });
+assert.deepEqual(resizeLocked(wide, 'nw', -5, -3, 1024, 1024, 16, 9), wide, 'it moves in steps of 16');
+for (const [h, dx, dy] of [['nw', -300, -10], ['ne', 50, -400], ['sw', 200, 30], ['s', 0, 333], ['w', 260, 0], ['e', -5000, 0], ['n', 0, 5000]]) {
+  const f = resizeLocked(wide, h, dx, dy, 1024, 1024, 16, 9);
+  assert.ok(shape(f, 16, 9), `${h} keeps 16:9 (${f.width} × ${f.height})`);
+  assert.equal(validateFrame(f.width, f.height, f.x, f.y, 1024, 1024, { side: 99999, area: 1e12, ratio: 5, minArea: 0, gpu: true }), '', `${h} keeps a part of the image`);
+}
+// Recortar: inside the image and to the pixel, a handle pulled outward stops at the edge.
+const crop169 = ratioFrame(IW, IH, 16, 9);
+assert.deepEqual(resizeLocked(crop169, 'se', -200, 0, IW, IH, 16, 9, true), { width: 1336, height: 752, x: 0, y: -144 });
+assert.deepEqual(resizeLocked(crop169, 'e', -300, 0, IW, IH, 16, 9, true), { width: 1236, height: 695, x: 0, y: -229 });
+assert.deepEqual(resizeLocked(crop169, 'nw', -500, -500, IW, IH, 16, 9, true), crop169);
+assert.deepEqual(resizeLocked({ width: 400, height: 400, x: -1100, y: -700 }, 'e', 900, 0, IW, IH, 1, 1, true), { width: 436, height: 436, x: -1100, y: -682 }, 'a side stops where the image ends');
+for (const [h, dx, dy] of [['nw', 700, 500], ['ne', -900, 30], ['s', 0, 2000], ['w', -3000, 0], ['sw', 9999, -9999], ['n', 0, -77]]) {
+  const f = resizeLocked(crop169, h, dx, dy, IW, IH, 16, 9, true);
+  assert.ok(['crop', 'same'].includes(frameKind(f.width, f.height, f.x, f.y, IW, IH)), `${h} stays inside the image`);
+  assert.ok(hasRatio(f.width, f.height, 16, 9), `${h} keeps 16:9 to the pixel (${f.width} × ${f.height})`);
+}
+assert.deepEqual(resizeLocked({ width: 800, height: 600, x: -100, y: -100 }, 'n', 0, -94, IW, IH, 4, 3, true, 8), { width: 933, height: 700, x: -34, y: 0 }, 'an edge close to the image\'s sticks to it');
+// A typed side takes the other with it.
+assert.deepEqual(lockedSize(crop169, 'width', 800, IW, IH, 16, 9, true), { width: 800, height: 450, x: 0, y: -144 });
+assert.deepEqual(lockedSize(crop169, 'width', 4000, IW, IH, 16, 9, true), crop169, 'never larger than the image');
+assert.deepEqual(lockedSize(crop169, 'height', 1152, IW, IH, 1, 1, true), { width: 1152, height: 1152, x: 0, y: 0 });
+assert.deepEqual(lockedSize(wide, 'width', 2048, 1024, 1024, 16, 9), { width: 2048, height: 1152, x: 400, y: 0 });
+assert.deepEqual(lockedSize(wide, 'height', 1200, 1024, 1024, 16, 9), { width: 2128, height: 1200, x: 400, y: 0 }, 'with a new area, the other side in a multiple of 16');
 // A frame around the image fills the stage; the scale never goes over 1.
 assert.deepEqual(frameView({ width: 2048, height: 1536, x: 256, y: 192 }, IW, IH, 1088, 832), { scale: 0.5, x: 32, y: 32 });
 // A crop: the whole image is still shown, and the frame is drawn where it sits on it.
 const cropView = frameView({ width: 768, height: 576, x: -384, y: -288 }, IW, IH, 1088, 832);
 assert.deepEqual([cropView.scale.toFixed(4), Math.round(cropView.x), Math.round(cropView.y)], ['0.6667', 288, 224]);
 assert.equal(frameView({ width: 320, height: 320, x: 0, y: 0 }, 320, 320, 1088, 832).scale, 1);
-console.log('PASS frame geometry: crop, expansion and both at once, free crop sizes, multiples of 16 with new areas, API limits, magnet to the image edges, positioning, view');
+console.log('PASS frame geometry: crop, expansion and both at once, free crop sizes, multiples of 16 with new areas, API limits, magnet to the image edges, locked proportions, positioning, view');

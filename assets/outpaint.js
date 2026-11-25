@@ -106,6 +106,78 @@ export function ratioFrame(iw, ih, rw, rh) {
   const width = iw * rh > ih * rw ? Math.max(16, Math.round(ih * rw / rh)) : iw, height = width === iw ? Math.max(16, Math.round(iw * rh / rw)) : ih;
   return { width, height, x: 0 - Math.floor((iw - width) / 2), y: 0 - Math.floor((ih - height) / 2) };
 }
+// A locked proportion (Recortar and Expandir alike): once one is chosen, the frame keeps that shape while a handle is
+// dragged or a size is typed, until Livre. Recortar keeps it inside the image, to the pixel. Expandir can take it
+// outside, where the sides are multiples of 16, so the shape is the closest those sizes allow (within 16 px a side).
+const ceil16 = n => Math.ceil(n / 16) * 16;
+/**
+ * The smallest frame of a proportion (rw:rh) that holds the whole image, with the image in the middle: an expansion to
+ * that shape. When the image already has it, the frame is a quarter larger all around, as Expandir starts.
+ */
+export function aroundFrame(iw, ih, rw, rh) {
+  let width = Math.max(iw, ih * rw / rh), height = width * rh / rw;
+  if (width - iw < 1 && height - ih < 1) { width *= 1.25; height *= 1.25; }
+  let w = Math.max(ceil16(iw), snap16(width)), h = Math.max(ceil16(ih), snap16(w * rh / rw));
+  // A side raised to hold the image takes the other with it.
+  w = Math.max(ceil16(iw), snap16(h * rw / rh));
+  return centerFrame({ width: w, height: h, x: 0, y: 0 }, iw, ih);
+}
+/**
+ * The frame after one of its handles is dragged with the proportion rw:rh locked. A corner holds the opposite corner and
+ * follows the pointer along the side it moved most; a side moves its own edge, and the two sides next to it grow or
+ * shrink evenly. `inside` (Recortar) keeps the frame inside the image; otherwise it keeps a part of the image, and once
+ * it reaches outside, its sides are multiples of 16. An edge that comes within `magnet` pixels of an edge of the image
+ * sticks to it.
+ */
+export function resizeLocked(frame, handle, dx, dy, iw, ih, rw, rh, inside = false, magnet = 0) {
+  const left = -frame.x, top = -frame.y, right = left + frame.width, bottom = top + frame.height;
+  const keepW = Math.min(KEEP, iw), keepH = Math.min(KEEP, ih);
+  const stick = (v, size) => (Math.abs(v) <= magnet ? 0 : Math.abs(v - size) <= magnet ? size : v);
+  const e = handle.includes('e'), w = handle.includes('w'), s = handle.includes('s'), n = handle.includes('n');
+  // The scale the pointer asks for along each side it moves: the frame is scale × rw wide and scale × rh high.
+  const alongX = e ? (stick(right + dx, iw) - left) / rw : w ? (right - stick(left + dx, iw)) / rw : null;
+  const alongY = s ? (stick(bottom + dy, ih) - top) / rh : n ? (bottom - stick(top + dy, ih)) / rh : null;
+  let scale = alongY === null || (alongX !== null && Math.abs(alongX - frame.width / rw) >= Math.abs(alongY - frame.height / rh)) ? alongX : alongY;
+  let low = Math.max(keepW / rw, keepH / rh), high = Infinity;
+  if (inside) high = Math.min((e ? iw - left : w ? right : iw) / rw, (s ? ih - top : n ? bottom : ih) / rh);
+  else {
+    // A held edge outside the image leaves room for the part of the image the frame keeps.
+    if (e) low = Math.max(low, (keepW - left) / rw);
+    if (w) low = Math.max(low, (right - iw + keepW) / rw);
+    if (s) low = Math.max(low, (keepH - top) / rh);
+    if (n) low = Math.max(low, (bottom - ih + keepH) / rh);
+  }
+  scale = Math.min(high, Math.max(low, scale));
+  // Where a side of this size goes: from the held edge, or evenly around the middle of a side that does not move,
+  // without leaving the image (Recortar) or the part of it the frame keeps (Expandir).
+  const place = (a, b, size, movedA, movedB, image, keep) => {
+    let start = movedB ? a : movedA ? b - size : Math.round((a + b - size) / 2);
+    if (!movedA && !movedB) start = inside ? Math.max(0, Math.min(image - size, start)) : Math.max(keep - size, Math.min(image - keep, start));
+    return start;
+  };
+  let width = Math.round(scale * rw), height = Math.round(scale * rh);
+  let x0 = place(left, right, width, w, e, iw, keepW), y0 = place(top, bottom, height, n, s, ih, keepH);
+  if (!inside && (x0 < 0 || y0 < 0 || x0 + width > iw || y0 + height > ih)) {
+    width = Math.max(16, snap16(scale * rw)); height = Math.max(16, snap16(scale * rh));
+    x0 = place(left, right, width, w, e, iw, keepW); y0 = place(top, bottom, height, n, s, ih, keepH);
+  }
+  return { width, height, x: 0 - x0, y: 0 - y0 };
+}
+/**
+ * A typed side with the proportion rw:rh locked: the other side follows. Recortar (`inside`) keeps both within the
+ * image; in Expandir a frame that reaches outside the image gets the other side in a multiple of 16.
+ */
+export function lockedSize(frame, side, value, iw, ih, rw, rh, inside = false) {
+  let width = side === 'width' ? value : value * rw / rh, height = side === 'width' ? value * rh / rw : value;
+  if (inside) {
+    const fit = Math.min(1, iw / width, ih / height);
+    width *= fit; height *= fit;
+    return holdCrop({ ...frame, width: Math.round(width), height: Math.round(height) }, 0, 0, iw, ih);
+  }
+  const exact = sizeFrame(frame, Math.round(width), Math.round(height), iw, ih);
+  if (frameKind(exact.width, exact.height, exact.x, exact.y, iw, ih) === 'crop') return exact;
+  return sizeFrame(frame, side === 'width' ? value : Math.max(16, snap16(width)), side === 'height' ? value : Math.max(16, snap16(height)), iw, ih);
+}
 /** Whether a frame has a proportion (rw:rh), to the pixel it was rounded to. */
 export const hasRatio = (width, height, rw, rh) => Math.abs(width * rh - height * rw) <= Math.max(rw, rh);
 /** The image in the middle of the frame. */
