@@ -139,6 +139,7 @@ from behind, looking at the sea') ?>"></textarea></label>
                 <label><?= e('Background') ?><select id="background"><option value="auto"><?= e('Automatic', ['ctx' => 'background']) ?></option><option value="opaque"><?= e('Opaque') ?></option><option value="transparent"><?= e('Transparent') ?></option></select></label>
               </div>
               <label id="compression-wrap" hidden><?= e('Compression') ?><span class="range-row"><input type="range" id="compression" min="0" max="100" value="90"><output id="compression-value">90</output></span></label>
+              <p id="format-gpu-note" class="hint" hidden></p>
               <div class="row2">
                 <label><?= e('Previews') ?><select id="previews"><option value="0"><?= e('Off', ['ctx' => 'previews']) ?></option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label>
                 <label><?= e('Moderation') ?><select id="moderation"><option value="low"><?= e('Low') ?></option><option value="auto"><?= e('Automatic') ?></option></select></label>
@@ -858,6 +859,11 @@ from behind, looking at the sea') ?>"></textarea></label>
         <div class="settings-card stack">
           <label><?= e('Turn the GPU off after') ?><select id="gpu-idle"></select></label>
           <p class="hint"><?= e('Minutes without requests. Each session downloads and loads the models again (a few minutes), so a longer wait is better while you are still making videos or pictures.') ?></p>
+        </div>
+        <div class="settings-card stack" id="gpu-pictures-card">
+          <label class="switch"><input type="checkbox" id="gpu-jpeg"><span class="switch-track" aria-hidden="true"></span><span><?= e('Save the pictures as JPEG') ?></span></label>
+          <label id="gpu-quality-wrap" hidden><?= e('JPEG quality') ?><span class="range-row"><input type="range" id="gpu-quality" min="50" max="100" value="85"><output id="gpu-quality-value">85</output></span></label>
+          <p class="hint"><?= e('The pictures made on the GPU come as PNG, which loses nothing but gets heavy: at 8K or more each one takes tens of megabytes. With this on, the notebook saves them as JPEG before sending them, several times smaller, with no difference to see at 85. It counts for new pictures and for edits, Upscale, Expand, Photoreal and Enhance on the GPU, here and through MCP. A request that asks for JPEG or WebP itself (More options › Format) keeps its own.') ?></p>
         </div>
         <div class="settings-card stack" id="lora-card">
           <h4>LoRAs</h4>

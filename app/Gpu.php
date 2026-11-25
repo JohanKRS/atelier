@@ -26,6 +26,9 @@ final class Gpu
     /** The notebook, opened in Colab straight from the public repository. */
     public const NOTEBOOK = 'https://colab.research.google.com/github/JohanKRS/atelier/blob/main/colab/atelier_gpu.ipynb';
     public const IDLE_CHOICES = [5, 10, 15, 20, 30, 45, 60];
+    /** The qualities a picture can be saved at as a JPEG (Settings › GPU), and the one it starts at. */
+    public const JPEG_QUALITY = [50, 100];
+    public const DEFAULT_JPEG_QUALITY = 85;
     private const TOKEN = '/\Aigv_([a-f0-9]{24})_([A-Za-z0-9_-]{43})\z/D';
 
     public function __construct(private Vault $vault, private array $config = []) {}
@@ -190,7 +193,10 @@ final class Gpu
         return $row ?: null;
     }
 
-    /** What the page shows: whether there is a token, the worker (when it is on), the idle minutes and the queue. */
+    /**
+     * What the page shows: whether there is a token, the worker (when it is on), the idle minutes, how the pictures are
+     * saved and the queue.
+     */
     public function status(): array
     {
         $row = $this->row(); $now = time();
@@ -213,9 +219,43 @@ final class Gpu
         $q = $this->vault->db->prepare("SELECT status, COUNT(*) AS n FROM jobs WHERE user_id=? AND runner='gpu' AND status IN ('queued','running','cancelling') GROUP BY status");
         $q->execute([$this->vault->owner()]); $counts = array_column($q->fetchAll(), 'n', 'status');
         return ['token'=>$row !== null && $row['token_id'] !== null ? ['created'=>(int)$row['created'], 'used'=>$row['used'] === null ? null : (int)$row['used']] : null,
-            'worker'=>$worker, 'last'=>$last, 'idle_minutes'=>$idle, 'idle_choices'=>self::IDLE_CHOICES, 'queued'=>(int)($counts['queued'] ?? 0),
+            'worker'=>$worker, 'last'=>$last, 'idle_minutes'=>$idle, 'idle_choices'=>self::IDLE_CHOICES,
+            'pictures'=>$this->pictureFormat() + ['range'=>self::JPEG_QUALITY], 'queued'=>(int)($counts['queued'] ?? 0),
             'running'=>(int)($counts['running'] ?? 0) + (int)($counts['cancelling'] ?? 0), 'notebook'=>(string)($this->config['video_notebook'] ?? self::NOTEBOOK),
             'engines'=>self::engines(), 'image_engines'=>self::imageEngines(), 'now'=>$now];
+    }
+
+    /**
+     * How the worker saves the pictures it makes, before sending them: as each request asks (PNG unless it asks for JPEG
+     * or WebP), or, with jpeg on, a picture that would be a PNG as a JPEG at this quality. A PNG of 8K or more is several
+     * times the size of a JPEG at 85, with no difference to see.
+     * @return array{jpeg:bool,quality:int}
+     */
+    public function pictureFormat(): array
+    {
+        $row = $this->row();
+        $quality = (int)($row['picture_quality'] ?? 0);
+        return ['jpeg'=>(int)($row['picture_jpeg'] ?? 0) === 1, 'quality'=>$quality >= self::JPEG_QUALITY[0] && $quality <= self::JPEG_QUALITY[1] ? $quality : self::DEFAULT_JPEG_QUALITY];
+    }
+
+    public function setPictureFormat(bool $jpeg, mixed $quality = null): void
+    {
+        $quality = $quality === null ? $this->pictureFormat()['quality'] : filter_var($quality, FILTER_VALIDATE_INT);
+        if ($quality === false || $quality < self::JPEG_QUALITY[0] || $quality > self::JPEG_QUALITY[1])
+            throw new HttpError(422, t('Choose a JPEG quality from {min} to {max}.', ['min'=>self::JPEG_QUALITY[0], 'max'=>self::JPEG_QUALITY[1]]));
+        $this->ensureRow();
+        $this->vault->db->prepare('UPDATE gpu_workers SET picture_jpeg=?, picture_quality=? WHERE user_id=?')->execute([$jpeg ? 1 : 0, $quality, $this->vault->owner()]);
+    }
+
+    /**
+     * The options of a GPU picture request in the format it is saved in: a PNG becomes a JPEG at the account's quality
+     * when Settings › GPU says so. A request that asks for JPEG or WebP keeps its own format and quality.
+     */
+    public function pictureOptions(array $options): array
+    {
+        $f = $this->pictureFormat();
+        if ($f['jpeg'] && ($options['format'] ?? 'png') === 'png') { $options['format'] = 'jpeg'; $options['compression'] = $f['quality']; }
+        return $options;
     }
 
     public function setIdleMinutes(int $minutes): void

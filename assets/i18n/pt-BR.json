@@ -3214,5 +3214,11 @@
  "Cleaning": "Limpando",
  "{label}: specks and fine lines removed on the server, without using the API.": "{label}: pontinhos e linhas finas removidos no servidor, sem usar a API.",
  "{label}: made on the server, without using the API. The version it came from is still saved.": "{label}: feito no servidor, sem usar a API. A versão de onde ele saiu continua salva.",
- "Could not read the image.": "Não foi possível ler a imagem."
+ "Could not read the image.": "Não foi possível ler a imagem.",
+ "Save the pictures as JPEG": "Salvar as imagens em JPEG",
+ "JPEG quality": "Qualidade do JPEG",
+ "The pictures made on the GPU come as PNG, which loses nothing but gets heavy: at 8K or more each one takes tens of megabytes. With this on, the notebook saves them as JPEG before sending them, several times smaller, with no difference to see at 85. It counts for new pictures and for edits, Upscale, Expand, Photoreal and Enhance on the GPU, here and through MCP. A request that asks for JPEG or WebP itself (More options › Format) keeps its own.": "As imagens feitas na GPU saem em PNG, que não perde nada mas pesa: em 8K ou mais, cada uma ocupa dezenas de megabytes. Com isto ligado, o notebook salva em JPEG antes de enviar, várias vezes menor e sem diferença visível em 85. Vale para imagens novas e para edições, Ampliar, Expandir, Fotorrealista e Melhorar na GPU, aqui e pelo MCP. Um pedido que já pede JPEG ou WebP (Mais opções › Formato) fica com o dele.",
+ "Choose a JPEG quality from {min} to {max}.": "Escolha uma qualidade de JPEG de {min} a {max}.",
+ "On the GPU the PNG is saved as JPEG at quality {quality}, as set in Settings › GPU.": "Na GPU, o PNG é salvo em JPEG com qualidade {quality}, como em Configurações › GPU.",
+ "{format}, quality {quality}": "{format}, qualidade {quality}"
 }

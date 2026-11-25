@@ -69,13 +69,13 @@ final class Vault
             // Columns added after the first release. Phase, preview counters, owners, when a request started and whether its
             // process holds a lock, who runs it (null: this server; gpu: the video worker on a GPU, as in Google Colab) and the
             // progress that worker reports (steps and its own status line), the custom order, the chosen cover of each image's versions, whether an item is hidden from
-            // the library and the stack it was grouped into (a random id), and whether an album's items show in the
-            // library hold no user content; the
+            // the library and the stack it was grouped into (a random id), whether an album's items show in the library,
+            // and whether the GPU saves its pictures as JPEG and at what quality hold no user content; the
             // balance settings and the account's preferences (the reader's settings) are sealed like the API key, and a story's
             // character sheets, its comic adaptation (with the adaptation's own bible, plan and sheets) and a visual novel's
             // settings and art like its bible.
             foreach (['jobs'=>['phase'=>'TEXT', 'preview'=>'INTEGER NOT NULL DEFAULT 0', 'user_id'=>'TEXT', 'started'=>'INTEGER', 'worker_lock'=>'INTEGER NOT NULL DEFAULT 0', 'runner'=>'TEXT', 'progress'=>'TEXT'], 'images'=>['user_id'=>'TEXT', 'position'=>'REAL', 'cover'=>'INTEGER NOT NULL DEFAULT 0', 'hidden'=>'INTEGER NOT NULL DEFAULT 0', 'stack'=>'TEXT'],
-                'users'=>['billing'=>'BLOB', 'claude_key'=>'BLOB', 'prefs'=>'BLOB', 'gemini_key'=>'BLOB'], 'albums'=>['library'=>'INTEGER NOT NULL DEFAULT 1'], 'gpu_workers'=>['loras'=>'BLOB'], 'stories'=>['cast'=>'BLOB', 'comic'=>'BLOB', 'vn'=>'BLOB', 'vn_art'=>'BLOB', 'comic_notes'=>'BLOB', 'comic_plan'=>'BLOB', 'comic_cast'=>'BLOB']] as $table => $added) {
+                'users'=>['billing'=>'BLOB', 'claude_key'=>'BLOB', 'prefs'=>'BLOB', 'gemini_key'=>'BLOB'], 'albums'=>['library'=>'INTEGER NOT NULL DEFAULT 1'], 'gpu_workers'=>['loras'=>'BLOB', 'picture_jpeg'=>'INTEGER NOT NULL DEFAULT 0', 'picture_quality'=>'INTEGER'], 'stories'=>['cast'=>'BLOB', 'comic'=>'BLOB', 'vn'=>'BLOB', 'vn_art'=>'BLOB', 'comic_notes'=>'BLOB', 'comic_plan'=>'BLOB', 'comic_cast'=>'BLOB']] as $table => $added) {
                 $columns = array_column($this->db->query("PRAGMA table_info($table)")->fetchAll(), 'name');
                 foreach ($added as $column => $type) {
                     if (in_array($column, $columns, true)) continue;

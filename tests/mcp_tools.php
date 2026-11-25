@@ -47,7 +47,7 @@ try {
     $tools = Mcp::tools(); $names = array_column($tools, 'name');
     check(array_slice($names, 0, 7) === ['generate_image','edit_image','upscale_image','list_images','get_image','import_image','check_requests'] && count($names) === count(array_unique($names)), 'the tools keep their order and every name is unique');
     foreach (['clean_image','crop_image','expand_image','photoreal_image','enhance_image','update_image','trash_images','delete_images','list_albums','create_album','update_album','delete_album',
-        'stack_images','unstack_images','reorder_images','cancel_request','retry_request','gpu_status','stop_gpu','set_gpu_idle','list_loras','save_lora','delete_lora',
+        'stack_images','unstack_images','reorder_images','cancel_request','retry_request','gpu_status','stop_gpu','set_gpu_idle','set_gpu_pictures','list_loras','save_lora','delete_lora',
         'generate_video','improve_video_prompt','get_video','duplicate_story','favorite_story','delete_story'] as $name) check(in_array($name, $names, true), "MCP offers $name");
     check(array_search('delete_story', $names, true) < array_search('list_stories', $names, true), 'and the studio\'s tools come before the stories\'');
     check(in_array('minimax-h3-image', array_column($tools, 'inputSchema', 'name')['generate_image']['properties']['model']['enum'], true), 'the GPU model can be chosen');
@@ -150,6 +150,16 @@ try {
     $state = $tool('gpu_status', [])['data'];
     check($state['on'] === false && $state['queued'] >= 2 && $state['token_made'] === true && str_contains($state['note'], 'Colab'), 'gpu_status says the GPU is off and what waits for it');
     check($tool('set_gpu_idle', ['minutes'=>30])['data']['idle_minutes'] === 30 && $gpu->status()['idle_minutes'] === 30 && $failed($tool('set_gpu_idle', ['minutes'=>7])), 'the idle minutes can be set to the page\'s choices');
+    check($state['pictures']['jpeg'] === false && $state['pictures']['jpeg_quality'] === 85, 'gpu_status says how the pictures are saved');
+    $set = $tool('set_gpu_pictures', ['jpeg'=>true])['data']['pictures'];
+    check($set['jpeg'] === true && $set['jpeg_quality'] === 85 && $gpu->pictureFormat() === ['jpeg'=>true,'quality'=>85] && $tool('gpu_status', [])['data']['pictures']['jpeg'] === true, 'set_gpu_pictures turns JPEG on, at 85, as Settings › GPU does');
+    check($tool('set_gpu_pictures', ['jpeg'=>true,'quality'=>90])['data']['pictures']['jpeg_quality'] === 90 && $failed($tool('set_gpu_pictures', ['jpeg'=>true,'quality'=>30])) && $failed($tool('set_gpu_pictures', ['jpeg'=>'yes']))
+        && $gpu->pictureFormat() === ['jpeg'=>true,'quality'=>90], 'with a quality from 50 to 100, and a yes or no');
+    $small = $tool('generate_image', ['prompt'=>'a quiet harbor', 'model'=>'minimax-h3-image'])['data']['requests'][0];
+    $smallJob = $jobs->freshJob($small['request_id'], $key);
+    check($smallJob['options']['format'] === 'jpeg' && $smallJob['options']['compression'] === 90, 'and a GPU picture asked for through MCP is then saved as that JPEG');
+    $tool('cancel_request', ['request_id'=>$small['request_id']]);
+    $gpu->setPictureFormat(false);
     check($tool('stop_gpu', [])['data']['asked'] === true, 'the GPU can be asked to turn off');
     $cancelled = $tool('cancel_request', ['request_id'=>$r['request_id']]);
     check($cancelled['data']['request']['status'] === 'cancelled', 'a request waiting for the GPU can be cancelled');

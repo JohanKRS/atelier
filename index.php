@@ -337,7 +337,7 @@ try {
         Studio\json(['token'=>$token,'url'=>Studio\baseUrl($secure).'mcp.php','user'=>Users::summary($users->find($auth->user()['id']))]);
     }
     // The GPU worker (a notebook on a GPU, such as Google Colab): its token, shown once, how it is, when it turns itself
-    // off, a request to turn it off now, and the LoRAs of its image models.
+    // off, a request to turn it off now, how it saves the pictures, and the LoRAs of its image models.
     if (str_starts_with($action,'gpu')) {
         $gpu=new Gpu($vault,$config);
         if ($action==='gpu') Studio\json($gpu->status());
@@ -345,6 +345,8 @@ try {
         if ($action==='gpu-revoke') { $gpu->revokeToken($auth->user()['id']); Studio\json($gpu->status()); }
         if ($action==='gpu-stop') { $gpu->requestStop(); Studio\json($gpu->status()); }
         if ($action==='gpu-idle') { $gpu->setIdleMinutes((int)($input['minutes']??0)); Studio\json($gpu->status()); }
+        // How the worker saves the pictures: a PNG as a JPEG at this quality, or as each request asks.
+        if ($action==='gpu-pictures') { $gpu->setPictureFormat(($input['jpeg']??false)===true,$input['quality']??null); Studio\json($gpu->status()); }
         // The account's LoRAs for the GPU's image models: listed, added or changed, removed.
         if ($action==='gpu-loras') Studio\json(['loras'=>$gpu->loras($key)]);
         if ($action==='gpu-lora') Studio\json(['loras'=>$gpu->saveLora($input,$key)]);

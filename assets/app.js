@@ -284,7 +284,7 @@ const gpuUi = createGpu({ api, h, icon, toast, confirmAction, trackJob: job => {
   pickImages: (list, max, done, title) => openPicker({ textarea: '#video-prompt', list: () => list, offset: 0, max, base: () => null, render: done, title, mentions: false }),
   pickVideos: (list, max, done, title) => openPicker({ textarea: '#video-prompt', list: () => list, offset: 0, max, base: () => null, render: done, title, mentions: false, kind: 'video' }),
   keys: () => ({ claude: !!state.has_claude_key, openai: !!state.has_key, gemini: !!state.has_gemini_key }), formatUsd,
-  activeJobs: () => [...state.jobs.values()].filter(j => ACTIVE.has(j.status)), prefs: () => state.prefs, savePrefs, changed: () => scheduleRender(),
+  activeJobs: () => [...state.jobs.values()].filter(j => ACTIVE.has(j.status)), prefs: () => state.prefs, savePrefs, changed: () => { scheduleRender(); if (state.unlocked) updateGpuFormatNote(); },
   // The account's LoRAs changed (Settings › GPU): the pickers of the composer and the edit panel follow.
   lorasChanged: () => { if (state.unlocked) renderLoraFields(); } });
 
@@ -700,11 +700,20 @@ function updateComposerModel() {
     : model.flex
     ? t('Custom: multiples of 16, aspect ratio up to 3:1 and up to 3,840 px per side. Above 2560 × 1440 the result is experimental.')
     : t('This model only accepts 1:1, 2:3, 3:2 and automatic.');
+  updateGpuFormatNote();
 }
 function updateFormatFields() {
   const format = $('#format').value;
   $('#compression-wrap').hidden = format === 'png';
   if (format === 'jpeg' && $('#background').value === 'transparent') $('#background').value = 'opaque';
+  updateGpuFormatNote();
+}
+/** With the GPU's model, a PNG is saved as a JPEG when Settings › GPU says so: the composer says it under the format. */
+function updateGpuFormatNote() {
+  const pictures = gpuUi.pictures(), note = $('#format-gpu-note');
+  const converts = isGpu($('#model').value) && !!pictures?.jpeg && $('#format').value === 'png';
+  note.hidden = !converts;
+  note.textContent = converts ? t('On the GPU the PNG is saved as JPEG at quality {quality}, as set in Settings › GPU.', { quality: number(pictures.quality) }) : '';
 }
 // Several images from one request (the number next to the button): varied by the app, which plans one direction per
 // image from the request; one line per image, written by the owner; or all from the same request. The lines are prompt
@@ -3493,8 +3502,10 @@ function renderInfo() {
   if (!imported && item.options) {
     rows.push([t('Model'), model?.label || o.model], [t('Quality'), [...QUALITY, ...QUALITY_EXTENDED].find(([v]) => v === o.quality)?.[1] || o.quality]);
     if (model?.complexity) rows.push([t('Complexity'), COMPLEXITY.find(([v]) => v === o.complexity)?.[1] || o.complexity]);
-    rows.push([t('Format'), String(o.format || '').toUpperCase()]);
     const gpu = model?.provider === 'gpu' || !!item.made?.gpu;
+    // The GPU saves a JPEG or WebP at the quality the request had (Settings › GPU for a PNG turned into a JPEG).
+    const lossy = gpu && ['jpeg', 'webp'].includes(o.format) && Number.isFinite(o.compression);
+    rows.push([t('Format'), lossy ? t('{format}, quality {quality}', { format: String(o.format).toUpperCase(), quality: number(o.compression) }) : String(o.format || '').toUpperCase()]);
     if (o.thinking && o.thinking !== 'off') rows.push([t('Planning'), gpu ? (item.planning_skipped ? t('MiniMax\'s expander failed, made with the prompt as written') : t('MiniMax\'s expander'))
       : `${THINKING.find(([v]) => v === o.thinking)?.[1] || o.thinking}${PLANNING_SKIPPED[item.planning_skipped] ? `: ${PLANNING_SKIPPED[item.planning_skipped]}` : ''}`]);
     if (gpu) rows.push(...gpuPictureRows(o, item.made));
