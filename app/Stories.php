@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Studio;
 
 /**
- * Stories written with a writing agent (Claude or GPT): the text in chapters, the story bible (notes), the author's
+ * Stories written with a writing agent (Claude, GPT or Gemini): the text in chapters, the story bible (notes), the author's
  * private plan, and what the agent has already seen of them.
  *
  * Everything with content is sealed with the account's key, one blob per concern so the agent and the person can

@@ -4,6 +4,13 @@ What changed in each version of Atelier. Versions follow [Semantic Versioning](h
 
 To update an install, replace the app files with the ones from the new zip and keep `config.php`, `data-dir.php` (if present) and the data folder.
 
+## [Unreleased]
+
+### Stories and Visual Novel
+
+- The **Stories** and **Visual Novel** pages no longer have a line of text under the title. The one on **Stories** named only Claude and GPT, and the writer works with more models than those.
+- The **Stories** button at the top no longer says "written with Claude or GPT" when you hover it, and the `LEIA-ME.txt` of an exported story says the conversation went to the model, not to Claude or GPT.
+
 ## [1.6.0] - 2026-11-25
 
 ### MCP

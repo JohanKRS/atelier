@@ -60,7 +60,7 @@ $iconVersion = Studio\iconVersion();
     <a class="brand" href="./"><img src="assets/icon.svg?v=<?= $iconVersion ?>" alt="" width="26" height="26"><span>Atelier</span></a>
     <div class="segmented section-switch" role="group" aria-label="<?= e('Section') ?>">
       <button type="button" data-section="images" aria-pressed="true" title="<?= e('Images') ?>"><span data-icon="image"></span><span><?= e('Images') ?></span></button>
-      <button type="button" data-section="stories" aria-pressed="false" title="<?= e('Stories written with Claude or GPT') ?>"><span data-icon="book"></span><span><?= e('Stories') ?></span></button>
+      <button type="button" data-section="stories" aria-pressed="false" title="<?= e('Stories') ?>"><span data-icon="book"></span><span><?= e('Stories') ?></span></button>
       <button type="button" data-section="vn" aria-pressed="false" title="<?= e('Visual novels: a script with choices, routes and endings, sprites, backgrounds, a playable preview and Ren\'Py') ?>"><span data-icon="dialogue"></span><span>Visual Novel</span></button>
     </div>
     <span class="grow"></span>
@@ -219,7 +219,7 @@ from behind, looking at the sea') ?>"></textarea></label>
   <div class="stories" id="stories-view" hidden>
     <section class="stories-home" id="stories-home">
       <div class="stories-head">
-        <div><h2 id="stories-title"><?= e('Stories') ?></h2><p class="hint" id="stories-hint"><?= e('Written with Claude or GPT, planned from beginning to end, one chapter at a time.') ?></p></div>
+        <h2 id="stories-title"><?= e('Stories') ?></h2>
         <span class="grow"></span>
         <button type="button" id="stories-history" class="btn ghost small" title="<?= e('History: everything you asked for, the messages to the writer and the images') ?>"><span data-icon="history"></span><span><?= e('History') ?></span></button>
         <label class="btn ghost small" id="story-import" title="<?= e('A story downloaded from here as a .zip, which comes in as a new story. A zip with only chapters in Markdown (.md) also works.') ?>"><span data-icon="upload"></span><span><?= e('Import') ?></span><input id="story-import-input" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden></label>
