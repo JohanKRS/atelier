@@ -1630,6 +1630,47 @@ final class Vault
         } catch (\Throwable $e) { $this->db->rollBack(); throw $e; }
     }
 
+    /**
+     * Converter para JPEG: a PNG or WebP of the library becomes, in place, a JPEG at $quality. Everything else stays: its
+     * id, prompt, options, versions, albums, stack and thumbnail. Its options say JPEG from then on, so an edit or an
+     * upscale of it keeps the format, and converted keeps what it was. The old file is gone, which is the point: a PNG of
+     * 8K takes several times the space. A transparent picture can't be one.
+     * @return array{image:array,before:int,after:int}
+     */
+    public function convertToJpeg(string $id, int $quality, string $key): array
+    {
+        $item = $this->still($id, $key);
+        if (($item['mime'] ?? '') === 'image/jpeg') throw new HttpError(422, t('This image is already a JPEG.'));
+        if (($item['options']['background'] ?? '') === 'transparent') throw new HttpError(422, t('This image has a transparent background, which a JPEG can\'t keep.'));
+        $bytes = $this->bytes($id, 'full', $key);
+        $before = strlen($bytes);
+        $jpeg = Picture::jpeg($bytes, $quality);
+        unset($bytes);
+        // A drawing of a few flat colours can be smaller as a PNG: then the file stays as it is.
+        if (strlen($jpeg) >= $before) throw new HttpError(422, t('As a JPEG this image would not be smaller, so it stays as it is.'));
+        $path = "$this->dir/blobs/$id-full.enc"; $temp = "$path.".bin2hex(random_bytes(6)).'.tmp';
+        if (file_put_contents($temp, Crypto::seal($jpeg, $key, "$id:full"), LOCK_EX) === false) { @unlink($temp); throw new HttpError(500, t('Could not save the image.')); }
+        $meta = $item; unset($meta['id'], $meta['created'], $meta['favorite'], $meta['deleted'], $meta['position'], $meta['cover'], $meta['hidden'], $meta['stack']);
+        $from = ['image/png'=>'png', 'image/webp'=>'webp'][$item['mime'] ?? ''] ?? 'png';
+        $meta['mime'] = 'image/jpeg';
+        $meta['converted'] = ['from'=>$from, 'quality'=>$quality, 'at'=>time(), 'bytes'=>$before];
+        if (is_array($meta['options'] ?? null)) { $meta['options']['format'] = 'jpeg'; $meta['options']['compression'] = $quality; }
+        // The row and the file change together: the new file takes the old one's place only once the row says JPEG.
+        $own = !$this->db->inTransaction();
+        if ($own) $this->db->exec('BEGIN IMMEDIATE');
+        try {
+            $q = $this->db->prepare('UPDATE images SET meta=CAST(? AS BLOB) WHERE id=? AND user_id=?');
+            $q->execute([Crypto::seal(json_encode($meta, JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE), $key, "$id:meta"), $id, $this->owner()]);
+            if (!@rename($temp, $path)) throw new HttpError(500, t('Could not save the image.'));
+            if ($own) $this->db->exec('COMMIT');
+        } catch (\Throwable $e) {
+            if ($own) $this->db->exec('ROLLBACK');
+            @unlink($temp);
+            throw $e;
+        }
+        return ['image'=>$this->image($id, $key), 'before'=>$before, 'after'=>strlen($jpeg)];
+    }
+
     public function editMeta(string $id, string $title, string $prompt, string $key): void
     {
         $m=$this->image($id,$key); unset($m['id'],$m['created'],$m['favorite'],$m['deleted'],$m['position'],$m['cover'],$m['hidden'],$m['stack']);

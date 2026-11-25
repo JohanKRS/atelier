@@ -641,6 +641,7 @@ from behind, looking at the sea') ?>"></textarea></label>
             <button type="button" id="regenerate" class="btn secondary small"><span data-icon="redo"></span><?= e('Generate again') ?></button>
             <button type="button" id="as-reference" class="btn secondary small"><span data-icon="image-plus"></span><?= e('Use as reference') ?></button>
             <button type="button" id="open-video" class="btn secondary small" hidden><span data-icon="video"></span><?= e('Open in the video') ?></button>
+            <button type="button" id="convert-jpeg" class="btn secondary small" hidden title="<?= e('Replace this PNG or WebP with a JPEG, several times smaller') ?>"><span data-icon="image"></span><?= e('Convert to JPEG') ?></button>
           </div>
           <dl id="info-details" class="details"></dl>
         </section>

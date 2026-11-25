@@ -3478,6 +3478,7 @@ function renderInfo() {
       : t('{label}: made on this device, without using the API. The version it came from is still saved.', { label: item.label || t('Crop') })) : item.prompt;
   $('#info-prompt').textContent = text || (frame ? (frame.video_id ? t('Frame {n} ({time}) saved from a video.', { n: number((frame.frame ?? 0) + 1), time: timecode(frame.time) }) : t('Frame {n} ({time}) saved from a video that is not in the gallery.', { n: number((frame.frame ?? 0) + 1), time: timecode(frame.time) })) : imported ? t('Image imported from the computer.') : '');
   $('#open-video').hidden = !frame?.video_id;
+  $('#convert-jpeg').hidden = !canConvert(item);
   $('#info-prompt').classList.toggle('empty', !text);
   $('#prompt-editor').hidden = true; $('#info-prompt').hidden = false;
   $('#prompt-edit').hidden = imported || cleaned || cropped; $('#prompt-copy').hidden = !item.prompt;
@@ -3503,8 +3504,9 @@ function renderInfo() {
     rows.push([t('Model'), model?.label || o.model], [t('Quality'), [...QUALITY, ...QUALITY_EXTENDED].find(([v]) => v === o.quality)?.[1] || o.quality]);
     if (model?.complexity) rows.push([t('Complexity'), COMPLEXITY.find(([v]) => v === o.complexity)?.[1] || o.complexity]);
     const gpu = model?.provider === 'gpu' || !!item.made?.gpu;
-    // The GPU saves a JPEG or WebP at the quality the request had (Settings › GPU for a PNG turned into a JPEG).
-    const lossy = gpu && ['jpeg', 'webp'].includes(o.format) && Number.isFinite(o.compression);
+    // The GPU saves a JPEG or WebP at the quality the request had (Settings › GPU for a PNG turned into a JPEG), and
+    // Converter para JPEG at the one it was converted at.
+    const lossy = (gpu || !!item.converted) && ['jpeg', 'webp'].includes(o.format) && Number.isFinite(o.compression);
     rows.push([t('Format'), lossy ? t('{format}, quality {quality}', { format: String(o.format).toUpperCase(), quality: number(o.compression) }) : String(o.format || '').toUpperCase()]);
     if (o.thinking && o.thinking !== 'off') rows.push([t('Planning'), gpu ? (item.planning_skipped ? t('MiniMax\'s expander failed, made with the prompt as written') : t('MiniMax\'s expander'))
       : `${THINKING.find(([v]) => v === o.thinking)?.[1] || o.thinking}${PLANNING_SKIPPED[item.planning_skipped] ? `: ${PLANNING_SKIPPED[item.planning_skipped]}` : ''}`]);
@@ -3518,8 +3520,30 @@ function renderInfo() {
     if (cost !== null) rows.push([o.n > 1 ? t('Request cost') : t('Cost'), planned !== null ? t('{total}{images}, with {planning} of planning', { total: formatUsd(cost + planned), images, planning: formatUsd(planned) })
       : item.planning_usage || item.variation_usage ? t('{total}{images} + planning', { total: formatUsd(cost), images }) : formatUsd(cost) + images]);
   }
+  // Converter para JPEG: what the file was before.
+  const converted = item.converted;
+  if (converted) rows.push([t('Converted'), t('From {format} ({size}) to JPEG at quality {quality}, on {date}', { format: String(converted.from || 'png').toUpperCase(),
+    size: megabytes(converted.bytes || 0), quality: number(converted.quality || 0), date: dateTime(converted.at) })]);
   $('#info-details').replaceChildren(...rows.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
 }
+/** Converter para JPEG: a picture (not a video) that is a PNG or WebP with no transparent background. */
+function canConvert(item) {
+  return !!item && (item.kind || 'image') !== 'video' && ['image/png', 'image/webp'].includes(item.mime) && item.options?.background !== 'transparent';
+}
+$('#convert-jpeg').onclick = async () => {
+  const item = viewer.item; if (!canConvert(item)) return;
+  const quality = gpuUi.pictures()?.quality || 85, from = item.mime === 'image/webp' ? 'WebP' : 'PNG';
+  if (!await confirmAction({ title: t('Convert to JPEG?'), message: t('This image becomes a JPEG at quality {quality}, several times smaller, with no difference to see. The {format} is replaced and can\'t be brought back. Its prompt, versions and albums stay as they are.', { quality: number(quality), format: from }), confirm: t('Convert') })) return;
+  const button = $('#convert-jpeg'); button.disabled = true;
+  toast(t('Converting to JPEG…'));
+  try {
+    const result = await api('convert-jpeg', { id: item.id });
+    if (viewer.item?.id === item.id) { viewer.item = { ...viewer.item, ...result.image }; renderInfo(); }
+    refreshAfterJobs();
+    toast(t('Converted to JPEG: {before} became {after}.', { before: megabytes(result.before), after: megabytes(result.after) }));
+  } catch (e) { toast(e.message, { tone: 'error' }); }
+  finally { button.disabled = false; }
+};
 $('#prompt-copy').onclick = async () => { try { await navigator.clipboard.writeText(viewer.item?.prompt || ''); toast(t('Prompt copied.')); } catch { toast(t('Could not copy.'), { tone: 'error' }); } };
 $('#typed-copy').onclick = () => copyTyped(viewer.item);
 $('#prompt-edit').onclick = () => { $('#detail-prompt').value = viewer.item?.prompt || ''; $('#prompt-editor').hidden = false; $('#info-prompt').hidden = true; $('#detail-prompt').focus(); };

@@ -3220,5 +3220,17 @@
  "The pictures made on the GPU come as PNG, which loses nothing but gets heavy: at 8K or more each one takes tens of megabytes. With this on, the notebook saves them as JPEG before sending them, several times smaller, with no difference to see at 85. It counts for new pictures and for edits, Upscale, Expand, Photoreal and Enhance on the GPU, here and through MCP. A request that asks for JPEG or WebP itself (More options › Format) keeps its own.": "As imagens feitas na GPU saem em PNG, que não perde nada mas pesa: em 8K ou mais, cada uma ocupa dezenas de megabytes. Com isto ligado, o notebook salva em JPEG antes de enviar, várias vezes menor e sem diferença visível em 85. Vale para imagens novas e para edições, Ampliar, Expandir, Fotorrealista e Melhorar na GPU, aqui e pelo MCP. Um pedido que já pede JPEG ou WebP (Mais opções › Formato) fica com o dele.",
  "Choose a JPEG quality from {min} to {max}.": "Escolha uma qualidade de JPEG de {min} a {max}.",
  "On the GPU the PNG is saved as JPEG at quality {quality}, as set in Settings › GPU.": "Na GPU, o PNG é salvo em JPEG com qualidade {quality}, como em Configurações › GPU.",
- "{format}, quality {quality}": "{format}, qualidade {quality}"
+ "{format}, quality {quality}": "{format}, qualidade {quality}",
+ "This image is already a JPEG.": "Esta imagem já é um JPEG.",
+ "This image has a transparent background, which a JPEG can't keep.": "Esta imagem tem fundo transparente, que um JPEG não guarda.",
+ "As a JPEG this image would not be smaller, so it stays as it is.": "Em JPEG esta imagem não ficaria menor, então ela fica como está.",
+ "Replace this PNG or WebP with a JPEG, several times smaller": "Trocar este PNG ou WebP por um JPEG, várias vezes menor",
+ "Convert to JPEG": "Converter para JPEG",
+ "Converted": "Convertida",
+ "From {format} ({size}) to JPEG at quality {quality}, on {date}": "De {format} ({size}) para JPEG com qualidade {quality}, em {date}",
+ "Convert to JPEG?": "Converter para JPEG?",
+ "This image becomes a JPEG at quality {quality}, several times smaller, with no difference to see. The {format} is replaced and can't be brought back. Its prompt, versions and albums stay as they are.": "Esta imagem vira um JPEG com qualidade {quality}, várias vezes menor e sem diferença visível. O {format} é substituído e não dá para trazer de volta. O prompt, as versões e os álbuns continuam como estão.",
+ "Convert": "Converter",
+ "Converting to JPEG…": "Convertendo para JPEG…",
+ "Converted to JPEG: {before} became {after}.": "Convertida para JPEG: {before} viraram {after}."
 }

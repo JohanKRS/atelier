@@ -433,6 +433,9 @@ try {
         Studio\json(['ok'=>true]);
     }
     if ($action==='purge') { $vault->purge((string)($input['id']??'')); Studio\json(['ok'=>true]); }
+    // Converter para JPEG: a PNG or WebP of the library becomes a JPEG in place, at the account's JPEG quality (the one of
+    // Settings › GPU, 85 unless changed), with the sizes before and after.
+    if ($action==='convert-jpeg') Studio\json($vault->convertToJpeg((string)($input['id']??''),(new Gpu($vault,$config))->pictureFormat()['quality'],$key));
     if ($action==='import') {
         $image=OpenAI::imageInput((string)($input['data']??''));
         $bytes=base64_decode(substr($image['url'],strpos($image['url'],',')+1),true);

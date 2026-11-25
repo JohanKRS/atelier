@@ -12,7 +12,7 @@ namespace Studio;
 trait McpStudio
 {
     /** The tools of this trait that wait for a request or a model, so their answer is streamed (Mcp::isLong). */
-    private const STUDIO_LONG = ['clean_image','expand_image','photoreal_image','enhance_image','retry_request','improve_video_prompt'];
+    private const STUDIO_LONG = ['clean_image','expand_image','photoreal_image','enhance_image','retry_request','improve_video_prompt','convert_to_jpeg'];
     private const CLEAN_NAMES = ['light'=>'leve','medium'=>'media','média'=>'media','strong'=>'forte'];
     private const POSITIONS = ['center','top','bottom','left','right','top-left','top-right','bottom-left','bottom-right'];
 
@@ -129,6 +129,12 @@ trait McpStudio
             ['name'=>'delete_images','title'=>'Delete for good','annotations'=>$gone,
                 'description'=>'Delete items for good, with their files. Only items already in the trash are deleted (trash_images first); this can\'t be undone, so do it only when the person asks.',
                 'inputSchema'=>['type'=>'object','properties'=>['image_ids'=>$ids(100, 'Ids of items in the trash.')],'required'=>['image_ids']]],
+            ['name'=>'convert_to_jpeg','title'=>'Convert to JPEG','annotations'=>$gone,
+                'description'=>'Converter para JPEG, as the image details of the app do: library pictures saved as PNG or WebP become JPEGs in place, several times smaller with no difference to see '
+                    .'(a GPU picture of 8K or more goes from tens of MB to a few). The PNG or WebP is replaced and can\'t be brought back; the prompt, versions, albums and stacks stay as they are. '
+                    .'Videos, JPEGs and pictures with a transparent background are skipped, with the reason. Only when the person asks.',
+                'inputSchema'=>['type'=>'object','properties'=>['image_ids'=>$ids(20, 'Library pictures.'),
+                    'quality'=>['type'=>'integer','minimum'=>Gpu::JPEG_QUALITY[0],'maximum'=>Gpu::JPEG_QUALITY[1],'description'=>'JPEG quality. Default: the one of Settings › GPU ('.Gpu::DEFAULT_JPEG_QUALITY.' if never changed).']],'required'=>['image_ids']]],
             ['name'=>'list_albums','title'=>'List albums','annotations'=>$read,
                 'description'=>'The account\'s albums: id, name, how many items, cover, whether their items also show in the library, and the story, comic or visual novel an album belongs to.',
                 'inputSchema'=>['type'=>'object','properties'=>new \stdClass()]],
@@ -220,6 +226,7 @@ trait McpStudio
             'update_image' => $this->updateImage($args),
             'trash_images' => $this->trashImages($args),
             'delete_images' => $this->deleteImages($args),
+            'convert_to_jpeg' => $this->convertToJpeg($args, $keepalive),
             'list_albums' => self::answer(['albums'=>array_map(fn($a) => ['id'=>$a['id'],'name'=>$a['name'],'count'=>$a['count'],'cover_id'=>$a['cover'],'created'=>gmdate('c', $a['created']),
                 'show_in_library'=>$a['library'],'made_by'=>$a['kind'],'story_id'=>$a['story']], $this->vault->albums($this->key))]),
             'create_album' => $this->createAlbum($args),
@@ -622,6 +629,25 @@ trait McpStudio
         $ids = self::ids($args, 'image_ids', 100);
         $count = $this->vault->bulk('purge', $ids);
         return self::answer(['deleted'=>$count] + ($count < count($ids) ? ['note'=>'Only items in the trash are deleted: '.(count($ids) - $count).' of them were not (move them with trash_images first) or are already gone.'] : []));
+    }
+
+    /** Converter para JPEG: each picture in place, one after another (a picture of 40 MP takes a few seconds). */
+    private function convertToJpeg(array $args, ?\Closure $keepalive): array
+    {
+        $ids = self::ids($args, 'image_ids', 20);
+        $quality = $args['quality'] ?? $this->gpu()->pictureFormat()['quality'];
+        if (!is_int($quality) || $quality < Gpu::JPEG_QUALITY[0] || $quality > Gpu::JPEG_QUALITY[1]) throw new HttpError(422, 'quality must be a whole number from '.Gpu::JPEG_QUALITY[0].' to '.Gpu::JPEG_QUALITY[1].'.');
+        $converted = []; $skipped = [];
+        foreach ($ids as $id) {
+            if ($keepalive !== null) $keepalive();
+            try {
+                $done = $this->vault->convertToJpeg($id, $quality, $this->key);
+                $converted[] = ['id'=>$id,'from'=>$done['image']['converted']['from'] ?? 'png','bytes_before'=>$done['before'],'bytes_after'=>$done['after']];
+            } catch (HttpError $e) { $skipped[] = ['id'=>$id,'reason'=>$e->getMessage()]; }
+        }
+        $before = array_sum(array_column($converted, 'bytes_before')); $after = array_sum(array_column($converted, 'bytes_after'));
+        return self::answer(['quality'=>$quality,'converted'=>$converted] + ($skipped ? ['skipped'=>$skipped] : [])
+            + ($converted ? ['note'=>sprintf('%d picture(s) are JPEGs now: %.1f MB became %.1f MB.', count($converted), $before / 1048576, $after / 1048576)] : []));
     }
 
     private function createAlbum(array $args): array
