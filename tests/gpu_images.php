@@ -159,11 +159,11 @@ try{
     $claimed=$jobs->claimGpu([],$key);
     check(str_contains($claimed['prompt'],'Direction for this image'),'the others get their direction');
 
-    // Not through the writer or MCP
+    // Not through the writer; MCP offers them, as requests that wait for the notebook (tests/mcp_tools.php)
     rejects(fn()=>Studio\Writer::settings(['image_model'=>MODEL]),'the writer does not use the GPU\'s models',422);
     $tools=Studio\Mcp::tools(); $enum=null;
     foreach($tools as $t) if(($t['name']??'')==='generate_image') $enum=$t['inputSchema']['properties']['model']['enum']??null;
-    check(is_array($enum)&&!in_array(MODEL,$enum,true),'MCP does not offer them');
+    check(is_array($enum)&&in_array(MODEL,$enum,true),'MCP offers them');
 
     echo "\n$count checks passed\n";
 }finally{

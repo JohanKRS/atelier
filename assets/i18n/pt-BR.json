@@ -3204,5 +3204,15 @@
  "Up to {n} LoRAs": "Até {n} LoRAs",
  "Add a LoRA…": "Adicionar uma LoRA…",
  "With a new area, the canvas must stay within 12,000 px per side, 40 MP and an aspect ratio up to 5:1.": "Com área nova, a tela precisa respeitar o limite de 12.000 px por lado, 40 MP e proporção de até 5:1.",
- "The notebook turned itself off: Colab gave it a GPU too small for the models{gpu}. In Colab choose Runtime › Change runtime type › A100 or G4 and run it again; if it keeps giving another GPU, those are busy, so try the other one or again later.": "O notebook desligou sozinho: o Colab deu a ele uma GPU pequena demais para os modelos{gpu}. No Colab, escolha Ambiente de execução › Alterar o tipo de ambiente de execução › A100 ou G4 e rode de novo; se ele continuar dando outra GPU, essas estão ocupadas, então tente a outra ou mais tarde."
+ "The notebook turned itself off: Colab gave it a GPU too small for the models{gpu}. In Colab choose Runtime › Change runtime type › A100 or G4 and run it again; if it keeps giving another GPU, those are busy, so try the other one or again later.": "O notebook desligou sozinho: o Colab deu a ele uma GPU pequena demais para os modelos{gpu}. No Colab, escolha Ambiente de execução › Alterar o tipo de ambiente de execução › A100 ou G4 e rode de novo; se ele continuar dando outra GPU, essas estão ocupadas, então tente a outra ou mais tarde.",
+ "This image is too large to clean on the server.": "Esta imagem é grande demais para ser limpa no servidor.",
+ "while cleaning the image": "enquanto limpava a imagem",
+ "Only an edit, Photoreal, Enhance or an upscale of a whole image, made by an image API, can be cleaned before it is sent.": "Só uma edição, o Fotorrealista, o Melhorar ou a ampliação de uma imagem inteira, feitos por uma API de imagem, podem ser limpos antes do envio.",
+ "Cancelled.": "Cancelado.",
+ "Could not clean the image on the server.": "Não foi possível limpar a imagem no servidor.",
+ "Nothing was paid: the cleanup runs on this server. Clean the image again.": "Nada foi cobrado: a limpeza roda neste servidor. Limpe a imagem de novo.",
+ "Cleaning": "Limpando",
+ "{label}: specks and fine lines removed on the server, without using the API.": "{label}: pontinhos e linhas finas removidos no servidor, sem usar a API.",
+ "{label}: made on the server, without using the API. The version it came from is still saved.": "{label}: feito no servidor, sem usar a API. A versão de onde ele saiu continua salva.",
+ "Could not read the image.": "Não foi possível ler a imagem."
 }

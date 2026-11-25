@@ -61,6 +61,8 @@ jobs:
           php tests/albums.php
           php tests/video_prompt.php
           php tests/gpu_images.php
+          php tests/clean_php.php
+          php tests/mcp_tools.php
           php tests/i18n.php
       - name: Installation regression checks
         run: |

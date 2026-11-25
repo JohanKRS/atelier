@@ -1494,7 +1494,7 @@ function phaseText(job) {
   if (job.status === 'cancelling') return t('Cancelling…');
   if (job.status === 'completed') return t('Ready');
   if (job.previews) return t('Preview {previews} of {total}', { previews: job.previews, total: job.options?.previews || job.previews });
-  return { starting: t('Starting'), varying: t('Planning variations'), planning: t('Planning the prompt'), generating: t('Generating'), saving: t('Saving') }[job.phase] || t('Generating');
+  return { starting: t('Starting'), varying: t('Planning variations'), planning: t('Planning the prompt'), cleaning: t('Cleaning'), generating: t('Generating'), saving: t('Saving') }[job.phase] || (job.operation === 'clean' ? t('Cleaning') : t('Generating'));
 }
 function silenceOf(job) { return job.status === 'running' || job.status === 'cancelling' ? now() - job.updated : 0; }
 
@@ -3463,8 +3463,10 @@ function renderInfo() {
   const typed = typedText(item);
   $('#prompt-heading').textContent = item.operation === 'edit' ? (typed === null ? t('Requested change') : t('Full prompt')) : item.operation === 'expand' ? t('Expansion') : item.operation === 'upscale' ? t('Upscale') : cleaned ? t('Cleanup') : cropped ? t('Crop') : frame ? t('Source') : 'Prompt';
   const text = item.operation === 'expand' ? (item.label || t('Automatic expansion')) : item.operation === 'upscale' ? (item.label || t('Upscale'))
-    : cleaned ? t('{label}: specks and fine lines removed on this device, without using the API.', { label: item.label || t('Cleanup') })
-    : cropped ? t('{label}: made on this device, without using the API. The version it came from is still saved.', { label: item.label || t('Crop') }) : item.prompt;
+    : cleaned ? (item.made_on === 'server' ? t('{label}: specks and fine lines removed on the server, without using the API.', { label: item.label || t('Cleanup') })
+      : t('{label}: specks and fine lines removed on this device, without using the API.', { label: item.label || t('Cleanup') }))
+    : cropped ? (item.made_on === 'server' ? t('{label}: made on the server, without using the API. The version it came from is still saved.', { label: item.label || t('Crop') })
+      : t('{label}: made on this device, without using the API. The version it came from is still saved.', { label: item.label || t('Crop') })) : item.prompt;
   $('#info-prompt').textContent = text || (frame ? (frame.video_id ? t('Frame {n} ({time}) saved from a video.', { n: number((frame.frame ?? 0) + 1), time: timecode(frame.time) }) : t('Frame {n} ({time}) saved from a video that is not in the gallery.', { n: number((frame.frame ?? 0) + 1), time: timecode(frame.time) })) : imported ? t('Image imported from the computer.') : '');
   $('#open-video').hidden = !frame?.video_id;
   $('#info-prompt').classList.toggle('empty', !text);

@@ -4,6 +4,28 @@ What changed in each version of Atelier. Versions follow [Semantic Versioning](h
 
 To update an install, replace the app files with the ones from the new zip and keep `config.php`, `data-dir.php` (if present) and the data folder.
 
+## [1.6.0] - 2026-11-25
+
+### MCP
+
+- **The whole studio over MCP.** Besides making, editing and upscaling, a client can now do everything the page does to pictures, with the same ready-made instructions and the same rules:
+  - `clean_image`: **Clean** on the server, with a PHP copy of the page's filter that gives exactly the same result. It is a request of its own: it shows in **Requests** with its progress, can be cancelled and repeated, runs in the separate process where the host has one, uses no API and costs nothing.
+  - `clean_first` on `edit_image`, `photoreal_image`, `enhance_image` and `upscale_image`: **Clean before sending**, done on the server right before the image goes to the image API (off unless the client asks; not with a painted area, not on the GPU).
+  - `crop_image` (**Crop**: a rectangle, or the largest crop of a proportion) and `expand_image` (**Expand**: margins in pixels, negative ones crop that side, or a proportion with the picture where asked, as the page's proportions make it), made on the server with GD.
+  - `edit_image` takes `areas` (rectangles or ellipses, in pixels or fractions) or a `mask`, as the brush does: without a prompt the area is redone clean and correct, and `cover` is **Cover** (the area goes erased; without a prompt it is filled from what surrounds it).
+  - `photoreal_image` and `enhance_image` (**Photoreal** and **Enhance**), and `upscale_image` with `with: enhance` or `photoreal`.
+  - The image tools take `planning`, `complexity` and `album_id`.
+- **The library:** `list_images` lists videos, an album, the hidden items, the trash, grouped by versions and in any of the library's orders; `update_image` (title, prompt, favorite, hidden, cover), `trash_images`, `delete_images` (only what is in the trash), the albums (`list_albums`, `create_album`, `update_album`, `delete_album`), `stack_images`, `unstack_images` and `reorder_images`.
+- **Requests:** `cancel_request` and `retry_request`; `check_requests` tells cleanups, GPU pictures and videos apart, shows the GPU's progress and can wait for them (`wait_seconds`).
+- **The GPU on Colab:** `minimax-h3-image` can be chosen in the image tools, with `loras` and `seed`, and goes further when upscaling or expanding. `gpu_status`, `stop_gpu`, `set_gpu_idle` and the LoRAs (`list_loras`, `save_lora`, `delete_lora`). The notebook can only be turned on in Colab: while it is off, a GPU request waits in line (not an error), and the answer says so.
+- **Videos:** `generate_video` asks the GPU for a video with sound, as the video window does (pictures pinned at any second, reference pictures, videos and sounds, or from a library video: continue it, follow its motion, replace a part), and `improve_video_prompt` is the window's prompt helper. `get_video` gives a video's details and a download link, which now streams the video in byte ranges.
+- **Stories:** `duplicate_story`, `favorite_story` and `delete_story` (it needs the story's exact title).
+- `ping` answers with an empty result, as MCP asks; it used to answer with an internal error.
+
+### Pictures
+
+- A cleanup or a crop made on the server says so in the details of the picture.
+
 ## [1.5.0] - 2026-11-25
 
 ### Pictures
@@ -125,6 +147,7 @@ The first public release.
 - English and Brazilian Portuguese.
 - PHP 8.2 or newer with SQLite, no build step. Long requests keep going in the background, or in a separate process (`bin/worker.php`) on hosts that stop web processes early.
 
+[1.6.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.6.0
 [1.5.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.5.0
 [1.4.3]: https://github.com/JohanKRS/atelier/releases/tag/v1.4.3
 [1.4.2]: https://github.com/JohanKRS/atelier/releases/tag/v1.4.2

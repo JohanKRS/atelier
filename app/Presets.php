@@ -3,8 +3,8 @@ declare(strict_types=1);
 namespace Studio;
 
 /**
- * The ready-made image instructions of the edit panel (Fotorrealista, Melhorar, Ampliar), for requests made on the
- * server: the story writer uses them. The browser has its own copy in assets/app.js, where they are explained;
+ * The ready-made image instructions of the edit panel (Fotorrealista, Melhorar, Ampliar, Expandir, the brush), for
+ * requests made on the server: the story writer and MCP use them. The browser has its own copy in assets/app.js, where they are explained;
  * tests/story.mjs checks that the two say exactly the same.
  */
 final class Presets
@@ -73,6 +73,18 @@ TEXT.self::ENHANCE_STEPS;
     public const UPSCALE_PHOTOREAL = <<<'TEXT'
 This is also an upscale: the result is larger than the attached image. Use the extra resolution for a clean, natural photograph at that size, with the same framing, and do not add texture or pores to fill it.
 TEXT;
+
+    /** Expandir: the new areas around the image. Same as EXPAND_PROMPT in assets/app.js. */
+    public const EXPAND = 'Expand the image by filling only the transparent areas outside the original image. Preserve the elements, framing, details and colors of the original region. Continue the scene, lighting, perspective and textures naturally, with no borders, seams or repeated objects.';
+
+    /** An area marked with the brush and nothing written: the area made again as a correct version of itself (INPAINT_PROMPT). */
+    public const INPAINT = 'Redo only the area marked by the mask, and nothing else. Generate that area again as a clean, correct and natural version of what it shows: the same subject and elements, in the same place, pose and size, fixed wherever they are malformed, distorted, garbled, smudged or damaged (for example hands and fingers, faces, eyes, teeth, lettering, warped objects, broken textures, seams and artifacts). It must blend seamlessly with the rest of the picture: the same style, light, colors, perspective, focus and texture, with no visible border. Do not add new objects, do not remove what the area shows and do not change its meaning. Everything outside the marked area stays exactly as it is.';
+
+    /** Cobrir with text: the area goes erased, and is drawn from the text that follows (COVER_NOTE). */
+    public const COVER_NOTE = "The area marked by the mask was erased on purpose before sending: it is empty (transparent, or flat gray), so nothing of what was there should be guessed, kept or rebuilt. Draw that area anew following the request below, so that it blends seamlessly with the rest of the picture: the same style, light, colors, perspective, focus and texture, with no visible border. Everything outside the marked area stays exactly as it is.\n\nRequest: ";
+
+    /** Cobrir without text: the erased area filled with what surrounds it (FILL_PROMPT). */
+    public const FILL = 'The area marked by the mask was erased on purpose before sending: it is empty (transparent, or flat gray). Fill it with what naturally belongs there, continuing the surroundings (background, surfaces, light, perspective and textures), so that it looks as if whatever was there had never been in the picture. Do not add new objects or people, and leave no outline, seam or placeholder. Everything outside the marked area stays exactly as it is.';
 
     /** The ready-made instructions by name, with the name of the version they make. */
     public const EDITS = ['photoreal'=>[self::PHOTOREAL, 'Photoreal'], 'enhance'=>[self::ENHANCE, 'Enhanced']];

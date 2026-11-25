@@ -7,7 +7,7 @@ final class HttpError extends \RuntimeException
 { public function __construct(public readonly int $status, string $message, public readonly ?string $kind=null) { parent::__construct($message); } }
 
 /** The app's version: the newest one in CHANGELOG.md, changed with each release. Settings shows it, and MCP clients get it. */
-const VERSION = '1.5.0';
+const VERSION = '1.6.0';
 
 require_once __DIR__.'/I18n.php';
 require_once __DIR__.'/Crypto.php';
@@ -21,6 +21,9 @@ require_once __DIR__.'/GeminiImages.php';
 require_once __DIR__.'/GpuImages.php';
 require_once __DIR__.'/Catalog.php';
 require_once __DIR__.'/Presets.php';
+require_once __DIR__.'/Clean.php';
+require_once __DIR__.'/Picture.php';
+require_once __DIR__.'/McpStudio.php';
 require_once __DIR__.'/Jobs.php';
 require_once __DIR__.'/Gpu.php';
 require_once __DIR__.'/VideoPrompt.php';

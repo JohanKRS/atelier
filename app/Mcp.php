@@ -13,6 +13,8 @@ namespace Studio;
  */
 final class Mcp
 {
+    use McpStudio;
+
     public const PROTOCOLS = ['2025-11-25','2025-06-18','2025-03-26','2024-11-05'];
     private const LONG_TOOLS = ['generate_image','edit_image','upscale_image'];
     /** Story tools that may wait for a picture still being made (a reference, the previous page), so they are streamed too. */
@@ -40,7 +42,13 @@ TEXT;
 
     /** Calls that wait for the provider, so the answer must be streamed with keepalives. */
     public static function isLong(mixed $message): bool
-    { return is_array($message) && ($message['method'] ?? '') === 'tools/call' && in_array($message['params']['name'] ?? '', [...self::LONG_TOOLS, ...self::STORY_WAITS], true); }
+    {
+        if (!is_array($message) || ($message['method'] ?? '') !== 'tools/call') return false;
+        $name = $message['params']['name'] ?? '';
+        // check_requests waits only when asked to.
+        if ($name === 'check_requests') return (int)($message['params']['arguments']['wait_seconds'] ?? 0) > 0;
+        return in_array($name, [...self::LONG_TOOLS, ...self::STORY_WAITS, ...self::STUDIO_LONG], true);
+    }
 
     /** @return ?array the JSON-RPC answer, or null for notifications and client responses */
     public function handle(mixed $message, ?\Closure $keepalive = null): ?array
@@ -60,7 +68,7 @@ TEXT;
             default => null,
         };
         if ($result === null) return self::error($id, -32601, 'Method not found');
-        if (isset($result['jsonrpc_error'])) return self::error($id, $result['jsonrpc_error'], $result['message']);
+        if (is_array($result) && isset($result['jsonrpc_error'])) return self::error($id, $result['jsonrpc_error'], $result['message']);
         return ['jsonrpc'=>'2.0','id'=>$id,'result'=>$result];
     }
 
@@ -83,7 +91,10 @@ TEXT;
                 .'first with import_image. If a call times out, the request keeps running on the server: use check_requests to find its images. '
                 .'The account\'s stories (long fiction written chapter by chapter, with a story bible, a private plan, illustrations, a cover, character and place sheets, and comic or manga adaptations) '
                 .'can be worked on with the same tools the app\'s own writer uses: find the story with list_stories (or start one with create_story), then call open_story before anything else: '
-                .'it gives the writer\'s instructions, the story as it is now and an opened value, and every story tool takes the story_id and that opened value (they refuse without it).',
+                .'it gives the writer\'s instructions, the story as it is now and an opened value, and every story tool takes the story_id and that opened value (they refuse without it). '
+                .'The rest of the app is here too: Limpar (clean_image, or clean_first on an edit), crop, expand, a painted area and Cobrir (edit_image with areas or mask), Fotorrealista, Melhorar, '
+                .'the library (albums, stacks, hidden items, the trash), and the account\'s GPU on Colab, which makes minimax-h3-image pictures (with LoRAs) and videos with sound at no cost per picture, '
+                .'but only while the person has its notebook on: this server can\'t turn it on, so those requests wait in line until then (gpu_status, check_requests).',
         ];
     }
 
@@ -106,21 +117,12 @@ TEXT;
 
     public static function tools(): array
     {
-        // The GPU's models make pictures only while its notebook is on: not through MCP, whose calls wait for the picture.
-        $all = array_filter(Images::models(), fn($m) => ($m['provider'] ?? '') !== 'gpu'); $models = array_keys($all);
-        $size = ['type'=>'string','description'=>'Aspect ratio ('.implode(', ', array_keys(OpenAI::SIZES)).'), an exact WIDTHxHEIGHT in multiples of 16 '
-            .'(up to 3840 per side, at most 3:1, 0.65 to 8.3 megapixels, e.g. 2048x1152), or auto.'];
-        $quality = ['type'=>'string','enum'=>['low','medium','high','xhigh','max','auto'],'description'=>'Default high. xhigh and max only on GPT Image 2.5 and 2.6. On Nano Banana (gemini-*) it sets how much the model thinks first: low, medium or high (Nano Banana Pro: always high). Higher costs more.'];
-        $model = ['type'=>'string','enum'=>$models,'description'=>'Default '.$models[0].'. The gemini-* models (Nano Banana) need a Gemini key in the app\'s settings, read up to 14 images and have no transparent background.'];
-        $refs = ['type'=>'array','items'=>['type'=>'string'],'maxItems'=>15,'description'=>'Ids of library images to use as visual references (characters, products, style).'];
-        $n = ['type'=>'integer','minimum'=>1,'maximum'=>4,'description'=>'How many images, 1 to 4 (default 1). They run one after another.'];
-        $vary = ['type'=>'boolean','description'=>'With n > 1, first plan a distinct direction for each image (scene, pose, composition), since the API has no seed. One small extra planning call. Default true.'];
-        $lines = ['type'=>'array','items'=>['type'=>'string','maxLength'=>1000],'minItems'=>2,'maxItems'=>4,
-            'description'=>'One line per image (2 to 4), each completing the prompt for that image, e.g. ["sitting on the beach","running","seen from behind"]. Replaces n and vary: no planning call.'];
-        $title = ['type'=>'string','maxLength'=>200,'description'=>'Short title saved with the image.'];
-        $imageId = ['type'=>'string','pattern'=>'^[a-f0-9]{32}$','description'=>'Image id from this library.'];
+        $f = self::fields();
+        ['size'=>$size,'quality'=>$quality,'model'=>$model,'refs'=>$refs,'n'=>$n,'vary'=>$vary,'lines'=>$lines,'title'=>$title,'imageId'=>$imageId] = $f;
+        $flexible = array_keys(array_filter(Images::models(), fn($m) => $m['flex']));
         $write = ['readOnlyHint'=>false,'destructiveHint'=>false,'idempotentHint'=>false,'openWorldHint'=>true];
         $read = ['readOnlyHint'=>true,'destructiveHint'=>false,'idempotentHint'=>true,'openWorldHint'=>false];
+        $unit = ['type'=>'string','enum'=>['px','fraction'],'description'=>'px (default): pixels of the image as stored (get_image gives its width and height). fraction: 0 to 1 of its width and height.'];
         return [
             ['name'=>'generate_image','title'=>'Generate image','annotations'=>$write,
                 'description'=>'Create new images from a text prompt (optionally guided by reference images from the library) and save them to the library. Waits until they are ready and returns each image with its id, a preview and a download link.',
@@ -131,27 +133,49 @@ TEXT;
                     'background'=>['type'=>'string','enum'=>['auto','opaque','transparent'],'description'=>'transparent needs png or webp.'],
                     'format'=>['type'=>'string','enum'=>['png','jpeg','webp'],'description'=>'File format. Default png.'],
                     'n'=>$n,'vary'=>$vary,'lines'=>$lines,'reference_image_ids'=>$refs,'title'=>$title,
+                    'planning'=>$f['planning'],'complexity'=>$f['complexity'],'loras'=>$f['loras'],'seed'=>$f['seed'],'album_id'=>$f['album'],
                 ],'required'=>['prompt']]],
             ['name'=>'edit_image','title'=>'Edit image','annotations'=>$write,
-                'description'=>'Change an image from the library following an instruction. The result is saved as a new version linked to the original, which is kept. Keeps the original proportions unless size is given.',
+                'description'=>'Change an image from the library following an instruction. The result is saved as a new version linked to the original, which is kept. Keeps the original proportions unless size is given. '
+                    .'As the app\'s brush, areas or mask can mark the only part to change (the rest comes back as it is); with an area and no prompt, that area is redone clean and correct (fixing hands, faces, text, artifacts). '
+                    .'cover erases the area before sending, so the model draws it without seeing what was there (no prompt: it is filled with what surrounds it, to remove something).',
                 'inputSchema'=>['type'=>'object','properties'=>[
                     'image_id'=>$imageId,
-                    'prompt'=>['type'=>'string','maxLength'=>32000,'description'=>'What to change, and what must stay the same. @1 is the image being edited; @2, @3… are the reference_image_ids in order (e.g. "put the hat from @2 on the person in @1").'],
+                    'prompt'=>['type'=>'string','maxLength'=>32000,'description'=>'What to change, and what must stay the same. @1 is the image being edited; @2, @3… are the reference_image_ids in order (e.g. "put the hat from @2 on the person in @1"). '
+                        .'Optional with areas or mask.'],
+                    'areas'=>['type'=>'array','maxItems'=>20,'items'=>['type'=>'object','properties'=>[
+                            'x'=>['type'=>'number','minimum'=>0],'y'=>['type'=>'number','minimum'=>0],'width'=>['type'=>'number','exclusiveMinimum'=>0],'height'=>['type'=>'number','exclusiveMinimum'=>0],
+                            'shape'=>['type'=>'string','enum'=>['rect','ellipse'],'description'=>'Default rect.']],'required'=>['x','y','width','height']],
+                        'description'=>'The only parts of the image to change: rectangles or ellipses (x, y of the top left corner), in unit.'],
+                    'unit'=>$unit,
+                    'mask'=>['type'=>'string','description'=>'Instead of areas: a PNG or WebP (base64 or data URL), stretched to the image\'s size, whose transparent pixels are the part to change (the image API\'s convention); a mask with no transparency marks it in white on black.'],
+                    'cover'=>['type'=>'boolean','description'=>'Cobrir, with areas or mask: erase the area before sending, so nothing of what was there is kept. Default false.'],
                     'reference_image_ids'=>$refs,'size'=>$size,'quality'=>$quality,'model'=>$model,'n'=>$n,'vary'=>$vary,'lines'=>$lines,'title'=>$title,
-                ],'required'=>['image_id','prompt']]],
+                    'planning'=>$f['planning'],'complexity'=>$f['complexity'],'loras'=>$f['loras'],'seed'=>$f['seed'],'clean_first'=>$f['cleanFirst'],'album_id'=>$f['album'],
+                ],'required'=>['image_id']]],
             ['name'=>'upscale_image','title'=>'Upscale image','annotations'=>$write,
-                'description'=>'Recreate a library image at a larger size with more detail, keeping its proportions (the API has no native upscaler, so small details may change). Saved as a new version.',
+                'description'=>'Recreate a library image at a larger size with more detail, keeping its proportions (the API has no native upscaler, so small details may change). Saved as a new version. '
+                    .'with adds Melhorar\'s cleanup (enhance) or makes it Fotorrealista at the larger size (photoreal), as the app\'s Ampliar does.',
                 'inputSchema'=>['type'=>'object','properties'=>[
                     'image_id'=>$imageId,
-                    'scale'=>['type'=>'string','enum'=>['1.5','2','3','max'],'description'=>'Default 2. max is the largest size the API allows for these proportions.'],
+                    'scale'=>['type'=>'string','enum'=>['1.5','2','3','max'],'description'=>'Default 2. max is the largest size the model allows for these proportions (the GPU model goes up to 12000 px a side and 40 MP).'],
                     'instructions'=>['type'=>'string','maxLength'=>2000,'description'=>'Optional: what to improve, e.g. sharper face.'],
-                    'quality'=>$quality,'model'=>['type'=>'string','enum'=>array_values(array_filter($models, fn($m) => $all[$m]['flex']))],
+                    'with'=>['type'=>'string','enum'=>['none','enhance','photoreal'],'description'=>'Default none.'],
+                    'quality'=>$quality,'model'=>['type'=>'string','enum'=>$flexible,'description'=>$model['description']],
+                    'loras'=>$f['loras'],'seed'=>$f['seed'],'clean_first'=>$f['cleanFirst'],'album_id'=>$f['album'],
                 ],'required'=>['image_id']]],
             ['name'=>'list_images','title'=>'List images','annotations'=>$read,
-                'description'=>'List the library, newest first, optionally searching titles and prompts. Returns ids and metadata, no pixels.',
+                'description'=>'List the library, newest first, optionally searching titles and prompts, in an album, among videos, hidden items or the trash. Returns ids and metadata, no pixels.',
                 'inputSchema'=>['type'=>'object','properties'=>[
                     'query'=>['type'=>'string','maxLength'=>200,'description'=>'Text to look for in prompts and labels.'],
                     'favorites_only'=>['type'=>'boolean'],
+                    'kind'=>['type'=>'string','enum'=>['image','video','all'],'description'=>'Default image.'],
+                    'album_id'=>['type'=>'string','pattern'=>'^[a-f0-9]{32}$','description'=>'Only the items of this album (list_albums).'],
+                    'origin'=>['type'=>'string','enum'=>Vault::ORIGINS,'description'=>'generated (made by a model), imported (brought in, or a video frame) or video.'],
+                    'hidden'=>['type'=>'string','enum'=>['include','exclude','only'],'description'=>'Items hidden from the library (Ocultas): include (default), exclude or only.'],
+                    'trash'=>['type'=>'boolean','description'=>'List what is in the trash instead.'],
+                    'group'=>['type'=>'boolean','description'=>'One entry per image with its versions (and per stack), as the library shows them. Default false: every version.'],
+                    'sort'=>['type'=>'string','enum'=>Vault::SORTS,'description'=>'Default newest. custom is the order arranged by hand.'],
                     'limit'=>['type'=>'integer','minimum'=>1,'maximum'=>50,'description'=>'Default 20.'],
                     'offset'=>['type'=>'integer','minimum'=>0],
                 ]]],
@@ -168,10 +192,12 @@ TEXT;
                     'name'=>['type'=>'string','maxLength'=>160,'description'=>'File name or title.'],
                 ],'required'=>['data']]],
             ['name'=>'check_requests','title'=>'Check requests','annotations'=>$read,
-                'description'=>'Status of recent generation requests (the 10 newest, plus any ids given), with their errors and image ids. Use it after a call that timed out.',
+                'description'=>'Status of recent requests (the 10 newest, plus any ids given): images, cleanups and the GPU\'s pictures and videos, with their progress, errors and image ids. Use it after a call that timed out, or to wait for a GPU request.',
                 'inputSchema'=>['type'=>'object','properties'=>[
                     'request_ids'=>['type'=>'array','items'=>['type'=>'string'],'maxItems'=>20],
+                    'wait_seconds'=>['type'=>'integer','minimum'=>0,'maximum'=>600,'description'=>'With request_ids: wait up to this long (and at most what this server lets one call last) for them to end. Default 0.'],
                 ]]],
+            ...self::studioTools(),
             ...self::storyTools(),
         ];
     }
@@ -226,11 +252,11 @@ TEXT;
                 'list_images' => $this->listImages($args),
                 'get_image' => $this->getImage($args),
                 'import_image' => $this->import($args),
-                'check_requests' => $this->checkRequests($args),
+                'check_requests' => $this->checkRequests($args, $keepalive),
                 'list_stories' => $this->listStories(),
                 'create_story' => $this->createStory($args),
                 'open_story' => $this->openStory($args),
-                default => $this->storyTool($name, $args, $keepalive),
+                default => $this->studioCall($name, $args, $keepalive) ?? $this->storyTool($name, $args, $keepalive),
             };
         } catch (HttpError $e) {
             return self::failed($e->getMessage());
@@ -269,16 +295,18 @@ TEXT;
     /** Options from the tool arguments over the given base, validated by the same rules as the studio. */
     private function options(array $args, array $base = []): array
     {
-        // Options copied from an older image may name a model that is gone, or a quality the chosen model lacks.
-        // An image made on the GPU is changed here with the default model: the GPU's are not offered through MCP.
-        if (Images::model((string)($base['model'] ?? '')) === null || Images::provider((string)$base['model']) === 'gpu') unset($base['model'], $base['loras'], $base['seed'], $base['engine']);
+        // Options copied from an older image may name a model that is gone, or a quality the chosen model lacks. The
+        // GPU's model is used only when asked for: it makes pictures only while the account's notebook is on.
+        if (Images::model((string)($base['model'] ?? '')) === null || Images::provider((string)$base['model']) === 'gpu') unset($base['model']);
+        unset($base['loras'], $base['seed'], $base['engine']);
         $o = array_merge($base, ['n'=>1, 'previews'=>0, 'thinking'=>'off']);
-        foreach (['model','quality','background','format'] as $name) if (isset($args[$name])) $o[$name] = $args[$name];
-        if (is_string($o['model'] ?? null) && Images::provider($o['model']) === 'gpu') throw new HttpError(422, 'The GPU models are not available through MCP: they make pictures only while the notebook is on. Choose another model.');
-        $model = Images::model((string)($o['model'] ?? 'gpt-image-2.6-flare'));
+        foreach (['model','quality','background','format','complexity'] as $name) if (isset($args[$name])) $o[$name] = $args[$name];
+        if (isset($args['planning'])) $o['thinking'] = $args['planning'];
+        $id = (string)($o['model'] ?? 'gpt-image-2.6-flare'); $model = Images::model($id);
+        $provider = $model !== null ? Images::provider($id) : null;
         if ($model && !isset($args['quality']) && in_array($o['quality'] ?? '', ['xhigh','max'], true) && !$model['extended']) $o['quality'] = 'high';
-        // A source made with a transparent background, edited with Nano Banana, which has none.
-        if ($model && $model['provider'] === 'gemini' && !isset($args['background']) && ($o['background'] ?? '') === 'transparent') $o['background'] = 'auto';
+        // A source made with a transparent background, changed with a model that has none (Nano Banana, the GPU's).
+        if (in_array($provider, ['gemini','gpu'], true) && !isset($args['background']) && ($o['background'] ?? '') === 'transparent') $o['background'] = 'auto';
         if (isset($args['size'])) {
             if (!is_string($args['size'])) throw new HttpError(422, 'size must be a string.');
             $size = strtolower(str_replace([' ', '×', '*'], ['', 'x', 'x'], $args['size']));
@@ -291,13 +319,18 @@ TEXT;
         }
         $o['vary'] = !array_key_exists('vary', $args) || $args['vary'] === true;
         if (($o['background'] ?? '') === 'transparent' && ($o['format'] ?? 'png') === 'jpeg') $o['format'] = 'png';
+        if ($provider === 'gpu') {
+            if (isset($args['loras'])) $o['loras'] = $this->loras($args['loras']);
+            if (isset($args['seed'])) $o['seed'] = $args['seed'];
+        } elseif (isset($args['loras']) || isset($args['seed'])) throw new HttpError(422, 'loras and seed are only for the GPU model (minimax-h3-image).');
         return Images::options($o);
     }
 
     private function generate(array $args, ?\Closure $keepalive): array
     {
+        $album = $this->albumId($args);
         $created = $this->jobs->create(['id'=>bin2hex(random_bytes(16)),'prompt'=>self::text($args, 'prompt', 32000, true),'options'=>$this->options($args),
-            'references'=>$this->references($args),'label'=>self::text($args, 'title', 200)] + self::lines($args), $this->key);
+            'references'=>$this->references($args),'label'=>self::text($args, 'title', 200)] + self::lines($args) + ($album !== null ? ['album'=>$album] : []), $this->key);
         return $this->finish($created, $keepalive);
     }
 
@@ -309,18 +342,34 @@ TEXT;
         return ['lines'=>$args['lines']];
     }
 
+    /**
+     * An edit, as the studio's edit panel sends it: with a prompt, or with an area marked (areas or mask) and no prompt
+     * to redo that area, and with Cobrir to erase it first. Same ready-made instructions as the page (Presets).
+     */
     private function edit(array $args, ?\Closure $keepalive): array
     {
         $source = $this->vault->still(self::imageId($args), $this->key);
-        $base = is_array($source['options'] ?? null) ? $source['options'] : [];
-        $base['format'] ??= self::formatOf($source['mime']);
-        // Keep the source's proportions, in a size the chosen model accepts.
-        $model = is_string($args['model'] ?? null) ? $args['model'] : ($base['model'] ?? 'gpt-image-2.6-flare');
-        if (!isset($args['size'])) $base['size'] = self::editSize((int)$source['width'], (int)$source['height'], Images::model((string)$model)['flex'] ?? true);
-        $options = $this->options($args, $base);
-        $created = $this->jobs->create(['id'=>bin2hex(random_bytes(16)),'prompt'=>self::text($args, 'prompt', 32000, true),'options'=>$options,
-            'references'=>array_merge([['id'=>$source['id']]], $this->references($args)),'parent_id'=>$source['id'],'operation'=>'edit',
-            'label'=>self::text($args, 'title', 200)] + self::lines($args), $this->key);
+        $prompt = self::text($args, 'prompt', 32000);
+        $cover = ($args['cover'] ?? false) === true;
+        $area = $this->area($args, $source);
+        if ($area === null && $cover) throw new HttpError(422, 'cover needs the area to erase: give areas or mask.');
+        if ($area === null && $prompt === null) throw new HttpError(422, 'prompt must be a non-empty string (it is optional only with areas or mask, to redo that area).');
+        $redo = $prompt === null;
+        if ($redo && isset($args['lines'])) throw new HttpError(422, 'lines need a prompt: without one, the area is redone the same way in every image.');
+        // The ready-made instruction goes as written: no planning, every image the same request.
+        $options = $this->editOptions($source, $args, $redo ? ['planning'=>'off', 'vary'=>false] : []);
+        [$text, $label] = $redo ? ($cover ? [Presets::FILL, t('Covered area filled')] : [Presets::INPAINT, t('Area redone')])
+            : ($cover ? [Presets::COVER_NOTE.$prompt, t('Covered area: {text}', ['text'=>preg_replace('/\s+/u', ' ', $prompt)])] : [$prompt, null]);
+        try {
+            // With an area marked the image goes as it is (never cleaned first: what is outside the area comes back as it
+            // was sent); a covered area goes erased.
+            $first = $area !== null && $cover ? $this->covered($source, $area) : ['id'=>$source['id']];
+            $mask = $area !== null ? Picture::maskUrl($area['mask']) : null;
+        } finally { if ($area !== null) imagedestroy($area['mask']); }
+        $album = $this->albumId($args);
+        $created = $this->jobs->create(['id'=>bin2hex(random_bytes(16)),'prompt'=>$text,'options'=>$options,
+            'references'=>array_merge([$first], $this->references($args)),'mask'=>$mask,'parent_id'=>$source['id'],'operation'=>'edit',
+            'label'=>self::text($args, 'title', 200) ?? $label] + ($label !== null ? ['typed'=>''] : []) + self::lines($args) + self::cleanFirst($args) + ($album !== null ? ['album'=>$album] : []), $this->key);
         return $this->finish($created, $keepalive);
     }
 
@@ -330,43 +379,55 @@ TEXT;
         $scale = $args['scale'] ?? '2';
         $scale = is_int($scale) || is_float($scale) ? rtrim(rtrim(number_format((float)$scale, 1, '.', ''), '0'), '.') : $scale;
         if (!in_array($scale, ['1.5','2','3','max'], true)) throw new HttpError(422, 'scale must be 1.5, 2, 3 or max.');
-        $sizes = self::upscaleSizes((int)$source['width'], (int)$source['height']);
-        if (!$sizes) throw new HttpError(422, 'This image is already at the largest size the API can produce for its proportions.');
+        $with = $args['with'] ?? 'none';
+        if (!in_array($with, ['none','enhance','photoreal'], true)) throw new HttpError(422, 'with must be none, enhance or photoreal.');
+        $base = self::sourceOptions($source);
+        if (isset($base['model']) && !(Images::model((string)$base['model'])['flex'] ?? false)) unset($base['model']);
+        $model = self::editModel($args, $base); $gpu = Images::provider($model) === 'gpu';
+        $sizes = self::upscaleSizes((int)$source['width'], (int)$source['height'], $gpu);
+        if (!$sizes) throw new HttpError(422, 'This image is already at the largest size '.($gpu ? 'the GPU model makes' : 'the API can produce').' for its proportions.');
         if (!isset($sizes[$scale])) throw new HttpError(422, 'That scale is not available for this image. Available: '.implode(', ', array_keys($sizes)).'.');
         [$width, $height] = $sizes[$scale];
-        $instructions = self::text($args, 'instructions', 2000);
-        $base = is_array($source['options'] ?? null) ? $source['options'] : [];
-        $base['format'] ??= self::formatOf($source['mime']);
-        if (isset($base['model']) && !(Images::model((string)$base['model'])['flex'] ?? false)) unset($base['model']);
-        $options = $this->options(['size'=>"{$width}x{$height}"] + array_intersect_key($args, array_flip(['model','quality'])) + ['vary'=>false], $base);
+        $instructions = (string)self::text($args, 'instructions', 2000);
+        // Same format and background as the source. Planning would rewrite the instruction, so it stays off.
+        $options = $this->options(['size'=>"{$width}x{$height}"] + array_intersect_key($args, array_flip(['model','quality','loras','seed'])) + ['vary'=>false], $base);
         if (!Images::model($options['model'])['flex']) throw new HttpError(422, 'GPT Image 1 mini cannot upscale: choose another model.');
-        $created = $this->jobs->create(['id'=>bin2hex(random_bytes(16)),'prompt'=>Presets::upscale((string)$instructions),
+        $label = match ($with) {
+            'enhance' => t('Upscaled to {width} × {height} and enhanced', ['width'=>$width, 'height'=>$height]),
+            'photoreal' => t('Upscaled to {width} × {height}, photoreal', ['width'=>$width, 'height'=>$height]),
+            default => t('Upscaled to {width} × {height}', ['width'=>$width, 'height'=>$height]),
+        };
+        $album = $this->albumId($args);
+        $created = $this->jobs->create(['id'=>bin2hex(random_bytes(16)),'prompt'=>Presets::upscale($instructions, $with),
             'options'=>$options,'references'=>[['id'=>$source['id']]],'parent_id'=>$source['id'],'operation'=>'upscale',
             // Written by the MCP client, not typed by the person: the details offer nothing as "what you wrote".
-            'label'=>t('Upscaled to {width} × {height}', ['width'=>$width, 'height'=>$height]).($instructions ? ": $instructions" : ''),'typed'=>''], $this->key);
+            'label'=>$label.($instructions !== '' ? ": $instructions" : ''),'typed'=>''] + self::cleanFirst($args) + ($album !== null ? ['album'=>$album] : []), $this->key);
         return $this->finish($created, $keepalive);
     }
 
-    /** Runs the created jobs one after another and reports their images. */
+    /**
+     * Runs the created jobs and reports their images. The server's requests run here, or in a separate process that
+     * this call waits for; the GPU's are made by its notebook, which this call waits for only while it is on.
+     */
     private function finish(array $created, ?\Closure $keepalive): array
     {
-        $done = [];
-        if (($this->config['separate_process'] ?? false) && $this->api === null && $this->jobs->startSeparately(array_column($created, 'id'), $this->key)) {
+        $gpu = ($created[0]['runner'] ?? null) !== null;
+        $done = $created; $on = null;
+        if ($gpu) {
+            if ($on = $this->gpuOn()) $done = $this->waitFor($created, $keepalive, $this->waitDeadline());
+        } elseif (($this->config['separate_process'] ?? false) && $this->api === null && $this->jobs->startSeparately(array_column($created, 'id'), $this->key)) {
             // They run in a separate process, which the web server doesn't stop. This request only waits, and answers
             // before the web server's own limit (Hostinger: 120 s); what is still running is found with check_requests.
-            $limit = Spawn::webLimit(); $deadline = time() + max(20, min(840, ($limit ?? 900) - 25));
-            if (function_exists('set_time_limit')) @set_time_limit(0);
-            do {
-                usleep(1500000);
-                if ($keepalive !== null) $keepalive();
-                $done = array_map(fn(array $job) => $this->jobs->freshJob($job['id'], $this->key) ?? $job, $created);
-            } while (array_filter($done, fn(array $job) => in_array($job['status'], ['queued','running','cancelling'], true)) && time() < $deadline);
+            $done = $this->waitFor($created, $keepalive, $this->waitDeadline());
         }
-        else foreach ($created as $job) {
-            if (function_exists('set_time_limit')) @set_time_limit($this->config['api_timeout'] * 2 + 300);
-            $done[] = $this->jobs->runAndWait($job['id'], $this->key, $this->api, $keepalive);
+        else {
+            $done = [];
+            foreach ($created as $job) {
+                if (function_exists('set_time_limit')) @set_time_limit($this->config['api_timeout'] * 2 + 300);
+                $done[] = $this->jobs->runAndWait($job['id'], $this->key, $this->api, $keepalive);
+            }
         }
-        $report = []; $content = [];
+        $report = []; $content = []; $active = false;
         foreach ($done as $job) {
             $images = [];
             foreach ($job['image_ids'] as $imageId) {
@@ -374,25 +435,52 @@ TEXT;
                 $images[] = $this->describe($item);
                 $content[] = $this->preview($item);
             }
+            $running = in_array($job['status'], ['queued','running','cancelling'], true); $active = $active || $running;
+            $note = !$running ? null : (!$gpu ? 'Still running on the server. Call check_requests later.'
+                : ($on ? 'The GPU is making it (or it waits for the GPU\'s turn). Call check_requests with this request id, and wait_seconds, to wait for it.'
+                    : 'Waiting for the GPU: it is made once the person starts the notebook in Colab (Settings › GPU). It can\'t be started from here; check_requests shows when it is ready.'));
             $report[] = ['request_id'=>$job['id'],'status'=>$job['status'],'error'=>$job['error'],'variation'=>$job['variation']['label'] ?? null,'images'=>$images]
-                + (in_array($job['status'], ['queued','running','cancelling'], true) ? ['note'=>'Still running on the server. Call check_requests later.'] : []);
+                + ($gpu ? ['made_by'=>'gpu'] : []) + ($note !== null ? ['note'=>$note] : []);
         }
         array_unshift($content, ['type'=>'text','text'=>self::json(['requests'=>$report])]);
         $result = ['content'=>$content];
-        if (!array_filter($done, fn($j) => $j['image_ids'])) $result['isError'] = true;
+        // Nothing came out and nothing is on the way (a request waiting for the GPU is not an error).
+        if (!array_filter($done, fn($j) => $j['image_ids']) && !($gpu && $active)) $result['isError'] = true;
         return $result;
+    }
+
+    /** When a call that waits for requests answers: before the web server stops it (Hostinger: 120 s), else in 14 minutes. */
+    private function waitDeadline(): int
+    {
+        $limit = Spawn::webLimit();
+        return time() + max(20, min(840, ($limit ?? 900) - 25));
+    }
+
+    /** Waits for requests made elsewhere (a separate process, the GPU) until they end or the deadline. */
+    private function waitFor(array $jobs, ?\Closure $keepalive, int $deadline): array
+    {
+        if (function_exists('set_time_limit')) @set_time_limit(0);
+        $active = fn(array $list) => array_filter($list, fn(array $job) => in_array($job['status'], ['queued','running','cancelling'], true));
+        while ($active($jobs) && time() < $deadline) {
+            usleep(1500000);
+            if ($keepalive !== null) $keepalive();
+            $jobs = array_map(fn(array $job) => $this->jobs->freshJob($job['id'], $this->key) ?? $job, $jobs);
+        }
+        return $jobs;
     }
 
     /** Metadata for the client, with a download link of its own. */
     private function describe(array $item, bool $full = false): array
     {
+        $video = ($item['kind'] ?? 'image') === 'video';
         $out = ['id'=>$item['id'],'title'=>(string)($item['title'] ?? ''),'width'=>(int)$item['width'],'height'=>(int)$item['height'],'mime'=>$item['mime'],
-            'created'=>gmdate('c', (int)$item['created']),'operation'=>Vault::operation($item),'parent_id'=>Vault::lineageParent($item),
-            'download_url'=>$this->baseUrl.'mcp.php?file='.$this->vault->createLink($item['id'], $this->key, self::LINK_SECONDS),
+            'created'=>gmdate('c', (int)$item['created']),'operation'=>Vault::operation($item),'parent_id'=>Vault::lineageParent($item)]
+            + ($video ? ['kind'=>'video','duration'=>round((float)($item['duration'] ?? 0), 3)] : [])
+            + ['download_url'=>$this->baseUrl.'mcp.php?file='.$this->vault->createLink($item['id'], $this->key, self::LINK_SECONDS),
             'download_expires'=>gmdate('c', time() + self::LINK_SECONDS)];
         if ($full) {
             $out += ['prompt'=>(string)($item['prompt'] ?? ''),'original_prompt'=>$item['original_prompt'] ?? null,'planned_prompt'=>$item['planned_prompt'] ?? null,
-                'label'=>$item['label'] ?? null,'favorite'=>(bool)$item['favorite'],'options'=>$item['options'] ?? null,'variation'=>$item['variation']['label'] ?? null];
+                'label'=>$item['label'] ?? null,'favorite'=>(bool)$item['favorite'],'hidden'=>(bool)($item['hidden'] ?? false),'options'=>$item['options'] ?? null,'variation'=>$item['variation']['label'] ?? null];
         }
         return $out;
     }
@@ -408,9 +496,21 @@ TEXT;
     {
         $limit = filter_var($args['limit'] ?? 20, FILTER_VALIDATE_INT); $offset = filter_var($args['offset'] ?? 0, FILTER_VALIDATE_INT);
         if ($limit === false || $limit < 1 || $limit > 50 || $offset === false || $offset < 0) throw new HttpError(422, 'limit must be 1 to 50 and offset 0 or more.');
-        $page = $this->vault->gallery($this->key, (string)self::text($args, 'query', 200), ($args['favorites_only'] ?? false) === true, false, $offset, $limit, false, 'image');
-        $items = array_map(fn($i) => ['id'=>$i['id'],'title'=>$i['title'],'prompt'=>$i['prompt'],'label'=>$i['label'],'width'=>$i['width'],'height'=>$i['height'],
-            'created'=>gmdate('c', $i['created']),'operation'=>$i['operation'],'parent_id'=>$i['parent'],'favorite'=>$i['favorite'],'model'=>$i['model']], $page['items']);
+        $kind = $args['kind'] ?? 'image';
+        if (!in_array($kind, ['image','video','all'], true)) throw new HttpError(422, 'kind must be image, video or all.');
+        $hidden = $args['hidden'] ?? 'include';
+        if (!in_array($hidden, ['include','exclude','only'], true)) throw new HttpError(422, 'hidden must be include, exclude or only.');
+        $origin = $args['origin'] ?? null; $sort = $args['sort'] ?? 'newest';
+        if ($origin !== null && !in_array($origin, Vault::ORIGINS, true)) throw new HttpError(422, 'origin must be one of '.implode(', ', Vault::ORIGINS).'.');
+        if (!in_array($sort, Vault::SORTS, true)) throw new HttpError(422, 'sort must be one of '.implode(', ', Vault::SORTS).'.');
+        $view = ['search'=>(string)self::text($args, 'query', 200),'favorites'=>($args['favorites_only'] ?? false) === true,'trash'=>($args['trash'] ?? false) === true,
+            'kind'=>$kind === 'all' ? null : $kind,'origin'=>$origin,'album'=>$this->albumId($args),'group'=>($args['group'] ?? false) === true,'sort'=>$sort,
+            'hidden'=>['include'=>null,'exclude'=>false,'only'=>true][$hidden]];
+        $page = $this->vault->page($this->key, $view, $offset, $limit);
+        $items = array_map(fn($i) => ['id'=>$i['id'],'kind'=>$i['kind'],'title'=>$i['title'],'prompt'=>$i['prompt'],'label'=>$i['label'],'width'=>$i['width'],'height'=>$i['height'],
+            'created'=>gmdate('c', $i['created']),'operation'=>$i['operation'],'parent_id'=>$i['parent'],'favorite'=>$i['favorite'],'model'=>$i['model'],'versions'=>$i['versions']]
+            + ($i['hidden'] ? ['hidden'=>true] : []) + ($i['stack'] !== null ? ['stack'=>$i['stack']] : []) + ($i['deleted'] !== null ? ['trashed'=>gmdate('c', (int)$i['deleted'])] : [])
+            + ($i['kind'] === 'video' ? ['duration'=>$i['duration']] : []), $page['items']);
         return ['content'=>[['type'=>'text','text'=>self::json(['total'=>$page['total'],'has_more'=>$page['has_more'],'images'=>$items])]]];
     }
 
@@ -439,14 +539,23 @@ TEXT;
         return ['content'=>[['type'=>'text','text'=>self::json($this->describe($item))]]];
     }
 
-    private function checkRequests(array $args): array
+    private function checkRequests(array $args, ?\Closure $keepalive = null): array
     {
         $ids = $args['request_ids'] ?? [];
         if (!is_array($ids) || count($ids) > 20) throw new HttpError(422, 'request_ids must be a list of up to 20 ids.');
-        $jobs = array_map(fn($j) => ['request_id'=>$j['id'],'status'=>$j['status'],'phase'=>$j['phase'],'operation'=>$j['operation'],
-            'prompt'=>mb_substr($j['label'] ?? $j['prompt'], 0, 200),'created'=>gmdate('c', $j['created']),'error'=>$j['error'],'image_ids'=>$j['image_ids']],
-            $this->jobs->list($this->key, 'recent', array_values(array_filter($ids, 'is_string'))));
-        return ['content'=>[['type'=>'text','text'=>self::json(['requests'=>$jobs])]]];
+        $ids = array_values(array_filter($ids, 'is_string'));
+        $wait = filter_var($args['wait_seconds'] ?? 0, FILTER_VALIDATE_INT);
+        if ($wait === false || $wait < 0 || $wait > 600) throw new HttpError(422, 'wait_seconds must be 0 to 600.');
+        if ($wait > 0 && $ids) {
+            $asked = array_values(array_filter(array_map(fn($id) => preg_match('/\A[a-f0-9]{32}\z/D', $id) ? $this->jobs->freshJob($id, $this->key) : null, $ids)));
+            if ($asked) $this->waitFor($asked, $keepalive, min(time() + $wait, $this->waitDeadline()));
+        }
+        $jobs = array_map(fn($j) => $this->requestRow($j), $this->jobs->list($this->key, 'recent', $ids));
+        $out = ['requests'=>$jobs];
+        if (array_filter($jobs, fn($j) => $j['made_by'] === 'gpu' && in_array($j['status'], ['queued','running','cancelling'], true))) {
+            $gpu = $this->gpuState(); $out['gpu'] = ['on'=>$gpu['on'],'note'=>$gpu['note']];
+        }
+        return ['content'=>[['type'=>'text','text'=>self::json($out)]]];
     }
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -600,8 +709,10 @@ TEXT;
 
     private static function formatOf(string $mime): string { return ['image/jpeg'=>'jpeg','image/webp'=>'webp'][$mime] ?? 'png'; }
 
-    private static function validSize(int $w, int $h): bool
+    private static function validSize(int $w, int $h, bool $gpu = false): bool
     {
+        // The GPU's model brings its result to any size within its limits (validSize in assets/lineage.js).
+        if ($gpu) return min($w, $h) >= 64 && max($w, $h) <= GpuImages::MAX_SIDE && max($w, $h) / min($w, $h) <= 5 && $w * $h <= GpuImages::MAX_PIXELS;
         if ($w % 16 || $h % 16 || $w <= 0 || $h <= 0) return false;
         return max($w, $h) <= self::MAX_SIDE && max($w, $h) / min($w, $h) <= 3 && $w * $h >= self::MIN_AREA && $w * $h <= self::MAX_AREA;
     }
@@ -630,20 +741,21 @@ TEXT;
     }
 
     /**
-     * Same rule as upscaleSizes in assets/lineage.js.
+     * Same rule as upscaleSizes in assets/lineage.js (with the GPU model's limits when $gpu).
      * @return array<string,array{0:int,1:int}> scale => [width, height], only sizes clearly larger than the image
      */
-    public static function upscaleSizes(int $width, int $height): array
+    public static function upscaleSizes(int $width, int $height, bool $gpu = false): array
     {
-        if (!$width || !$height || $width / $height > 3 || $height / $width > 3) return [];
-        $limit = min(sqrt(self::MAX_AREA / ($width * $height)), self::MAX_SIDE / max($width, $height));
+        $ratio = $gpu ? 5 : 3;
+        if (!$width || !$height || $width / $height > $ratio || $height / $width > $ratio) return [];
+        $limit = min(sqrt(($gpu ? GpuImages::MAX_PIXELS : self::MAX_AREA) / ($width * $height)), ($gpu ? GpuImages::MAX_SIDE : self::MAX_SIDE) / max($width, $height));
         $sizes = [];
         foreach (['1.5'=>1.5, '2'=>2.0, '3'=>3.0, 'max'=>$limit] as $label => $scale) {
             if ($scale > $limit + 1e-9) continue;
             $size = null;
             foreach (['round','floor'] as $round) {
                 $w = (int)($round($width * $scale / 16) * 16); $h = (int)($round($height * $scale / 16) * 16);
-                if (self::validSize($w, $h)) { $size = [$w, $h]; break; }
+                if (self::validSize($w, $h, $gpu)) { $size = [$w, $h]; break; }
             }
             if (!$size || $size[0] * $size[1] < $width * $height * 1.2 || in_array($size, $sizes, true)) continue;
             $sizes[(string)$label] = $size;
