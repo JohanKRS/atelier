@@ -450,6 +450,22 @@ trait McpStudio
         return '';
     }
 
+    /**
+     * The smallest frame of a proportion (rw:rh) that holds the whole image, in multiples of 16 (aroundFrame in
+     * assets/outpaint.js): when the image already has that shape, a quarter larger all around.
+     * @return array{0:int,1:int}
+     */
+    private static function aroundFrame(int $iw, int $ih, int $rw, int $rh): array
+    {
+        $snap = static fn(float $n): int => (int)(floor($n / 16 + 0.5) * 16); $ceil = static fn(float $n): int => (int)(ceil($n / 16) * 16);
+        $width = max($iw, $ih * $rw / $rh); $height = $width * $rh / $rw;
+        if ($width - $iw < 1 && $height - $ih < 1) { $width *= 1.25; $height *= 1.25; }
+        $w = max($ceil($iw), $snap($width)); $h = max($ceil($ih), $snap($w * $rh / $rw));
+        // A side raised to hold the image takes the other with it.
+        $w = max($ceil($iw), $snap($h * $rw / $rh));
+        return [$w, $h];
+    }
+
     /** One side of a frame with new areas brought to a multiple of 16: a side that grows grows more; else one more pixel row is cut. */
     private static function settle(int $before, int $after, int $size): array
     {
@@ -469,12 +485,11 @@ trait McpStudio
         if (!(Images::model($model)['flex'] ?? false)) throw new HttpError(422, 'That model cannot expand: it makes only its own few sizes. Choose another model.');
         $album = $this->albumId($args);
         if (isset($args['aspect'])) {
-            // The smallest canvas of that shape around the whole image, in multiples of 16, at least what the API makes.
+            // The smallest frame of that shape around the whole image, as the page's proportions make it (aroundFrame in
+            // assets/outpaint.js), grown to the least the image APIs make when it is smaller.
             [$rw, $rh] = self::ratio($args['aspect']);
-            [$w, $h] = $iw * $rh >= $ih * $rw ? [$iw, $iw * $rh / $rw] : [$ih * $rw / $rh, $ih];
-            $grow = !$gpu && $w * $h < self::MIN_AREA ? sqrt(self::MIN_AREA / ($w * $h)) : 1.0;
-            $w = (int)(ceil($w * $grow / 16) * 16); $h = (int)(ceil($h * $grow / 16) * 16);
-            $w = max($w, (int)(ceil($iw / 16) * 16)); $h = max($h, (int)(ceil($ih / 16) * 16));
+            [$w, $h] = self::aroundFrame($iw, $ih, $rw, $rh);
+            if (!$gpu && $w * $h < self::MIN_AREA) { $grow = sqrt(self::MIN_AREA / ($w * $h)); $w = (int)(ceil($w * $grow / 16) * 16); $h = (int)(ceil($h * $grow / 16) * 16); }
             [$x, $y] = self::place($w - $iw, $h - $ih, $args['position'] ?? 'center');
         } else {
             $m = [];

@@ -54,7 +54,7 @@ The same story can become something else.
 
 ## And also
 
-- **Claude can use it too.** A built-in MCP server lets Claude, or any MCP client, make pictures and work on your stories with the same tools the app's writer has.
+- **Claude can use it too.** A built-in MCP server lets Claude, or any MCP client, use the whole studio: make, edit, clean, crop, expand and upscale pictures, run Fotorrealista and Melhorar, keep the library and its albums, ask the GPU for pictures and videos, and work on your stories with the same tools the app's writer has.
 - **Private by design.** Each account's library is encrypted with a key that only its password opens, so not even the admin can look inside. No analytics, no trackers, no outside fonts. The only calls that leave your server go to the AI providers you chose.
 - **Room for a few people.** One install can hold several accounts, each with its own library and keys.
 - **Knows what things cost.** An estimate before you generate, the real cost afterwards, and, if you like, a running balance for each provider.

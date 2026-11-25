@@ -40,6 +40,9 @@ try {
     $failed = fn(array $r, string $text = '') => !empty($r['isError']) && ($text === '' || str_contains($r['content'][0]['text'], $text));
     $last = function () use (&$calls) { return end($calls)[1]; };
 
+    $ping = $rpc('ping');
+    check(($ping['result'] ?? null) instanceof stdClass && !isset($ping['error']), 'ping answers with an empty result (it used to end in an error)');
+
     // The list: the image tools first, as before, then the studio's, then the stories'.
     $tools = Mcp::tools(); $names = array_column($tools, 'name');
     check(array_slice($names, 0, 7) === ['generate_image','edit_image','upscale_image','list_images','get_image','import_image','check_requests'] && count($names) === count(array_unique($names)), 'the tools keep their order and every name is unique');
@@ -93,7 +96,9 @@ try {
     check(alphaAt($sent['images'][0]['image_url'], 1100, 300) === 127 && alphaAt($sent['images'][0]['image_url'], 500, 300) === 0 && alphaAt($sent['mask']['image_url'], 1100, 300) === 127 && alphaAt($sent['mask']['image_url'], 500, 300) === 0, 'the new area is clear in the picture and in the mask, the kept image opaque');
     check(str_starts_with($sent['prompt'], Presets::EXPAND.' Instructions for the new areas: a garden') && $vault->image($expanded['data']['requests'][0]['images'][0]['id'], $key)['operation'] === 'expand', 'with the page\'s instruction, saved as an expansion');
     $wide = $tool('expand_image', ['image_id'=>$source['id'], 'aspect'=>'16:9']);
-    check($last()['size'] === '1376x768' && alphaAt($last()['images'][0]['image_url'], 10, 300) === 127 && alphaAt($last()['images'][0]['image_url'], 688, 300) === 0, 'an aspect ratio grows the canvas around the image, which stays in the middle');
+    check($last()['size'] === '1360x768' && alphaAt($last()['images'][0]['image_url'], 10, 300) === 127 && alphaAt($last()['images'][0]['image_url'], 168, 300) === 0 && alphaAt($last()['images'][0]['image_url'], 167, 300) === 127, 'an aspect ratio grows the canvas around the image as the page\'s proportions do, with the image in the middle');
+    $tool('expand_image', ['image_id'=>$source['id'], 'aspect'=>'4:3', 'position'=>'bottom-right']);
+    check($last()['size'] === '1280x960' && alphaAt($last()['images'][0]['image_url'], 255, 191) === 127 && alphaAt($last()['images'][0]['image_url'], 256, 192) === 0, 'the image\'s own shape makes it a quarter larger, and position places the image');
     $both = $tool('expand_image', ['image_id'=>$source['id'], 'left'=>-100, 'top'=>200]);
     check($last()['size'] === '912x976' && str_starts_with($vault->image($both['data']['requests'][0]['images'][0]['id'], $key)['label'], 'Crop and expansion'), 'a negative margin crops that side while the other grows');
     $before = count($calls);

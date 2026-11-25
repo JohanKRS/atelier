@@ -68,7 +68,7 @@ TEXT;
             default => null,
         };
         if ($result === null) return self::error($id, -32601, 'Method not found');
-        if (isset($result['jsonrpc_error'])) return self::error($id, $result['jsonrpc_error'], $result['message']);
+        if (is_array($result) && isset($result['jsonrpc_error'])) return self::error($id, $result['jsonrpc_error'], $result['message']);
         return ['jsonrpc'=>'2.0','id'=>$id,'result'=>$result];
     }
 
