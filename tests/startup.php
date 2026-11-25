@@ -15,6 +15,9 @@ try {
     $defaults=Studio\configuration($dir);
     check($defaults['require_https'] && $defaults['setup_token']==='','fresh installation has safe defaults without example file');
     check($defaults===(require dirname(__DIR__).'/config.example.php'),'example matches built-in defaults');
+    // The version that Settings shows and MCP clients get is the newest one in CHANGELOG.md: each release changes both.
+    preg_match('/^## \[(\d+\.\d+\.\d+)\]/m',(string)file_get_contents(dirname(__DIR__).'/CHANGELOG.md'),$newest);
+    check(($newest[1]??null)===Studio\VERSION,'the app\'s version is the newest one in CHANGELOG.md');
     file_put_contents($dir.'/config.php',"<?php return ['setup_token'=>'installation-token-test-only','session_minutes'=>30];");
     $c=Studio\configuration($dir);
     check($c['setup_token']==='installation-token-test-only' && $c['session_minutes']===30 && $c['require_https'],'renamed example configuration loads without template dependency');

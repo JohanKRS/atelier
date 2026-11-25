@@ -6,6 +6,9 @@ namespace Studio;
 final class HttpError extends \RuntimeException
 { public function __construct(public readonly int $status, string $message, public readonly ?string $kind=null) { parent::__construct($message); } }
 
+/** The app's version: the newest one in CHANGELOG.md, changed with each release. Settings shows it, and MCP clients get it. */
+const VERSION = '1.4.2';
+
 require_once __DIR__.'/I18n.php';
 require_once __DIR__.'/Crypto.php';
 require_once __DIR__.'/Vault.php';

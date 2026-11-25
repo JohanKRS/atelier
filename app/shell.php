@@ -1,6 +1,7 @@
 <?php
 use Studio\I18n;
 use function Studio\{e, t};
+use const Studio\VERSION;
 // The interface's language (I18n): the page names its translations for assets/i18n.js; English needs none.
 $language = I18n::language();
 $stringsFile = I18n::file($language);
@@ -651,6 +652,7 @@ from behind, looking at the sea') ?>"></textarea></label>
     <div class="settings-heading">
       <h2 id="settings-title"><?= e('Settings') ?></h2>
       <p class="signed-in"><span data-icon="user"></span><span><?= t('Signed in as <strong id="settings-user"></strong>') ?></span><span id="settings-role" class="pill"></span></p>
+      <a id="settings-version" class="app-version" href="https://github.com/JohanKRS/atelier/releases/tag/v<?= e(VERSION) ?>" target="_blank" rel="noopener noreferrer" title="<?= e('What changed in this version') ?>"><?= e('Version {version}', ['version'=>VERSION]) ?></a>
     </div>
     <button type="button" class="icon-btn" data-close="settings-dialog" data-icon="close" aria-label="<?= e('Close') ?>"></button>
   </div>

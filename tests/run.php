@@ -503,7 +503,7 @@ try{
   $rpc=fn(string $method,array $params=[],$id=1)=>$mcp->handle(['jsonrpc'=>'2.0','id'=>$id,'method'=>$method,'params'=>$params]);
   $tool=function(string $name,array $arguments)use($rpc){$r=$rpc('tools/call',['name'=>$name,'arguments'=>$arguments]);$r['result']['data']=json_decode($r['result']['content'][0]['text'],true);return $r['result'];};
   $init=$rpc('initialize',['protocolVersion'=>'2025-06-18','capabilities'=>new stdClass(),'clientInfo'=>['name'=>'test','version'=>'1']]);
-  check($init['result']['protocolVersion']==='2025-06-18'&&isset($init['result']['capabilities']['tools'])&&$init['result']['serverInfo']['name']==='atelier','MCP initialize answers with the requested protocol');
+  check($init['result']['protocolVersion']==='2025-06-18'&&isset($init['result']['capabilities']['tools'])&&$init['result']['serverInfo']['name']==='atelier'&&$init['result']['serverInfo']['version']===Studio\VERSION,'MCP initialize answers with the requested protocol and the app\'s version');
   check($rpc('initialize',['protocolVersion'=>'1999-01-01'])['result']['protocolVersion']==='2025-06-18','unknown protocol versions get a supported one');
   check($mcp->handle(['jsonrpc'=>'2.0','method'=>'notifications/initialized'])===null&&$rpc('nope')['error']['code']===-32601&&$mcp->handle(['id'=>1])['error']['code']===-32600,'notifications get no answer; unknown methods and invalid messages get JSON-RPC errors');
   $names=array_column($rpc('tools/list')['result']['tools'],'name');

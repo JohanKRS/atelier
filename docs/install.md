@@ -19,7 +19,7 @@ Apache and LiteSpeed read the included `.htaccess`. On nginx, see [nginx](#nginx
 4. **Create the first account.** Open the site, enter the setup token, and choose a name and a password of at least 12 characters. This account is the administrator. Keep the password safe: **there is no way to recover it, or the library, without it.**
 5. **Add your keys.** In **Settings › API keys**, add your OpenAI key, and optionally a Claude (Anthropic) key and a Gemini (Google) key for the writer and Nano Banana. Keys are encrypted in your library and never sent back to the browser. **Test** checks a key with a tiny request.
 
-To update, replace the app files with the ones from the new release (what changed is in [CHANGELOG.md](../CHANGELOG.md)) and keep `config.php`, `data-dir.php` (if present) and the data folder.
+To update, replace the app files with the ones from the new release (what changed is in [CHANGELOG.md](../CHANGELOG.md)) and keep `config.php`, `data-dir.php` (if present) and the data folder. The top of **Settings** shows the version the server is running, so you can check that the new one took.
 
 ## Configuration
 
