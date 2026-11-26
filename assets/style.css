@@ -1023,14 +1023,14 @@ select.compact-select { width: auto; min-height: 30px; padding: 4px 26px 4px 9px
 .section-switch { margin-left: 14px; }
 .stories { --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, "Times New Roman", serif; --reading: #e6e3dc; }
 .stories-home { max-width: 1180px; margin: 0 auto; padding: 28px 24px 64px; }
-.stories-head { display: flex; align-items: flex-end; gap: 4px; margin-bottom: 22px; }
-.stories-head h2 { font-size: 20px; margin-bottom: 4px; }
+.stories-head { display: flex; align-items: center; gap: 4px; margin-bottom: 22px; }
+.stories-head h2 { font-size: 20px; }
 /* Histórico and Importar are plain words with their room around them, and Nova história a filled button: the room
    between Histórico and Importar is the same as between Importar and the edge of Nova história. */
 .stories-head .grow { min-width: 12px; }
 #story-new { margin-left: 10px; }
 #story-import.busy { pointer-events: none; opacity: .55; }
-@media (max-width: 600px) { .stories-head { flex-wrap: wrap; row-gap: 12px; } .stories-head > div:first-child { flex: 1 0 100%; } .stories-head .grow { display: none; } }
+@media (max-width: 600px) { .stories-head { flex-wrap: wrap; row-gap: 12px; } .stories-head > h2 { flex: 1 0 100%; } .stories-head .grow { display: none; } }
 /*
  * The list: every card has the same height, and its cover shows whole. The covers have one height (as tall as a 2:3
  * book cover in a column of the row, so a row of books fills the width) and each card is as wide as its cover's shape
