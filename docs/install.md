@@ -128,6 +128,7 @@ What a request can bring, and how the worker makes it:
 | Upscale, a custom size up to 12,000 px a side and 40 MP | Drawn at up to 20 MP and resized to the size asked for |
 | Planning on | MiniMax's prompt expander (Qwen3.5 9B, from the official templates) rewrites the prompt with the pictures in view, and picks the shape when the size is Auto; 7 GB more the first time in a session |
 | LoRAs (up to 4, strength -2 to 2) | Loaded on the model in order, with their trigger words added to the prompt |
+| Format | Saved by the notebook before it sends the picture: PNG, or the JPEG or WebP the request asks for. With **Save the pictures as JPEG** on in **Settings › GPU**, a picture that would be a PNG is saved as a JPEG at the quality chosen there (85 to start), several times smaller at 8K and above |
 
 Variations work as with the other models: the directions of a varied batch are planned with the OpenAI or Gemini key, and each picture of the batch is a request for the GPU. There are no transparent backgrounds and no previews. The license (MiniMax-H3-Image Community License) doesn't allow use in the United States, the European Union, the United Kingdom or South Korea, and offering it to others as a hosted service needs MiniMax's authorization.
 

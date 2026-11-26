@@ -12,7 +12,7 @@ namespace Studio;
 trait McpStudio
 {
     /** The tools of this trait that wait for a request or a model, so their answer is streamed (Mcp::isLong). */
-    private const STUDIO_LONG = ['clean_image','expand_image','photoreal_image','enhance_image','retry_request','improve_video_prompt'];
+    private const STUDIO_LONG = ['clean_image','expand_image','photoreal_image','enhance_image','retry_request','improve_video_prompt','convert_to_jpeg'];
     private const CLEAN_NAMES = ['light'=>'leve','medium'=>'media','média'=>'media','strong'=>'forte'];
     private const POSITIONS = ['center','top','bottom','left','right','top-left','top-right','bottom-left','bottom-right'];
 
@@ -129,6 +129,12 @@ trait McpStudio
             ['name'=>'delete_images','title'=>'Delete for good','annotations'=>$gone,
                 'description'=>'Delete items for good, with their files. Only items already in the trash are deleted (trash_images first); this can\'t be undone, so do it only when the person asks.',
                 'inputSchema'=>['type'=>'object','properties'=>['image_ids'=>$ids(100, 'Ids of items in the trash.')],'required'=>['image_ids']]],
+            ['name'=>'convert_to_jpeg','title'=>'Convert to JPEG','annotations'=>$gone,
+                'description'=>'Converter para JPEG, as the image details of the app do: library pictures saved as PNG or WebP become JPEGs in place, several times smaller with no difference to see '
+                    .'(a GPU picture of 8K or more goes from tens of MB to a few). The PNG or WebP is replaced and can\'t be brought back; the prompt, versions, albums and stacks stay as they are. '
+                    .'Videos, JPEGs and pictures with a transparent background are skipped, with the reason. Only when the person asks.',
+                'inputSchema'=>['type'=>'object','properties'=>['image_ids'=>$ids(20, 'Library pictures.'),
+                    'quality'=>['type'=>'integer','minimum'=>Gpu::JPEG_QUALITY[0],'maximum'=>Gpu::JPEG_QUALITY[1],'description'=>'JPEG quality. Default: the one of Settings › GPU ('.Gpu::DEFAULT_JPEG_QUALITY.' if never changed).']],'required'=>['image_ids']]],
             ['name'=>'list_albums','title'=>'List albums','annotations'=>$read,
                 'description'=>'The account\'s albums: id, name, how many items, cover, whether their items also show in the library, and the story, comic or visual novel an album belongs to.',
                 'inputSchema'=>['type'=>'object','properties'=>new \stdClass()]],
@@ -159,7 +165,7 @@ trait McpStudio
                 'description'=>'Make a request again, with the same prompt, images and options (an image, a cleanup or a video), as the app\'s Repeat does. Waits for its images like generate_image.',
                 'inputSchema'=>['type'=>'object','properties'=>['request_id'=>$requestId,'n'=>$f['n'],'album_id'=>$f['album']],'required'=>['request_id']]],
             ['name'=>'gpu_status','title'=>'GPU status','annotations'=>$read,
-                'description'=>'Whether the account\'s GPU (the Colab notebook that makes the minimax-h3-image pictures and the videos) is on, what it is doing, what waits for it, and when it turns itself off. It is turned on only in Colab, by the person.',
+                'description'=>'Whether the account\'s GPU (the Colab notebook that makes the minimax-h3-image pictures and the videos) is on, what it is doing, what waits for it, when it turns itself off and how it saves the pictures (PNG or JPEG). It is turned on only in Colab, by the person.',
                 'inputSchema'=>['type'=>'object','properties'=>new \stdClass()]],
             ['name'=>'stop_gpu','title'=>'Turn GPU off','annotations'=>$same,
                 'description'=>'Ask the GPU notebook to turn itself off (it ends what it is making first, and the Colab runtime is released, so it stops using compute units). Requests waiting for it stay in line.',
@@ -167,6 +173,11 @@ trait McpStudio
             ['name'=>'set_gpu_idle','title'=>'GPU idle time','annotations'=>$same,
                 'description'=>'How many minutes without requests turn the GPU notebook off by itself.',
                 'inputSchema'=>['type'=>'object','properties'=>['minutes'=>['type'=>'integer','enum'=>Gpu::IDLE_CHOICES]],'required'=>['minutes']]],
+            ['name'=>'set_gpu_pictures','title'=>'GPU picture format','annotations'=>$same,
+                'description'=>'How the GPU notebook saves the minimax-h3-image pictures before sending them, as Settings › GPU does: jpeg true saves a picture that would be a PNG as a JPEG at quality (default 85), '
+                    .'several times smaller at 8K or more with no difference to see; false keeps PNG. It counts for every GPU picture from now on (new ones, edits, upscales, expansions). A request that asks for jpeg or webp itself keeps its own format.',
+                'inputSchema'=>['type'=>'object','properties'=>['jpeg'=>['type'=>'boolean'],
+                    'quality'=>['type'=>'integer','minimum'=>Gpu::JPEG_QUALITY[0],'maximum'=>Gpu::JPEG_QUALITY[1],'description'=>'JPEG quality. Default: the one set now ('.Gpu::DEFAULT_JPEG_QUALITY.' if never changed).']],'required'=>['jpeg']]],
             ['name'=>'list_loras','title'=>'List LoRAs','annotations'=>$read,
                 'description'=>'The LoRAs saved for the GPU model (Settings › GPU): id, name, link, trigger words and default strength.',
                 'inputSchema'=>['type'=>'object','properties'=>new \stdClass()]],
@@ -215,6 +226,7 @@ trait McpStudio
             'update_image' => $this->updateImage($args),
             'trash_images' => $this->trashImages($args),
             'delete_images' => $this->deleteImages($args),
+            'convert_to_jpeg' => $this->convertToJpeg($args, $keepalive),
             'list_albums' => self::answer(['albums'=>array_map(fn($a) => ['id'=>$a['id'],'name'=>$a['name'],'count'=>$a['count'],'cover_id'=>$a['cover'],'created'=>gmdate('c', $a['created']),
                 'show_in_library'=>$a['library'],'made_by'=>$a['kind'],'story_id'=>$a['story']], $this->vault->albums($this->key))]),
             'create_album' => $this->createAlbum($args),
@@ -228,6 +240,7 @@ trait McpStudio
             'gpu_status' => self::answer($this->gpuState()),
             'stop_gpu' => $this->stopGpu(),
             'set_gpu_idle' => $this->setGpuIdle($args),
+            'set_gpu_pictures' => $this->setGpuPictures($args),
             'list_loras' => self::answer(['loras'=>self::loraList($this->gpu()->loras($this->key))]),
             'save_lora' => $this->saveLora($args),
             'delete_lora' => self::answer(['loras'=>self::loraList($this->gpu()->deleteLora(self::loraId($args['lora_id'] ?? null), $this->key))]),
@@ -618,6 +631,25 @@ trait McpStudio
         return self::answer(['deleted'=>$count] + ($count < count($ids) ? ['note'=>'Only items in the trash are deleted: '.(count($ids) - $count).' of them were not (move them with trash_images first) or are already gone.'] : []));
     }
 
+    /** Converter para JPEG: each picture in place, one after another (a picture of 40 MP takes a few seconds). */
+    private function convertToJpeg(array $args, ?\Closure $keepalive): array
+    {
+        $ids = self::ids($args, 'image_ids', 20);
+        $quality = $args['quality'] ?? $this->gpu()->pictureFormat()['quality'];
+        if (!is_int($quality) || $quality < Gpu::JPEG_QUALITY[0] || $quality > Gpu::JPEG_QUALITY[1]) throw new HttpError(422, 'quality must be a whole number from '.Gpu::JPEG_QUALITY[0].' to '.Gpu::JPEG_QUALITY[1].'.');
+        $converted = []; $skipped = [];
+        foreach ($ids as $id) {
+            if ($keepalive !== null) $keepalive();
+            try {
+                $done = $this->vault->convertToJpeg($id, $quality, $this->key);
+                $converted[] = ['id'=>$id,'from'=>$done['image']['converted']['from'] ?? 'png','bytes_before'=>$done['before'],'bytes_after'=>$done['after']];
+            } catch (HttpError $e) { $skipped[] = ['id'=>$id,'reason'=>$e->getMessage()]; }
+        }
+        $before = array_sum(array_column($converted, 'bytes_before')); $after = array_sum(array_column($converted, 'bytes_after'));
+        return self::answer(['quality'=>$quality,'converted'=>$converted] + ($skipped ? ['skipped'=>$skipped] : [])
+            + ($converted ? ['note'=>sprintf('%d picture(s) are JPEGs now: %.1f MB became %.1f MB.', count($converted), $before / 1048576, $after / 1048576)] : []));
+    }
+
     private function createAlbum(array $args): array
     {
         $name = self::text($args, 'name', 120, true);
@@ -679,7 +711,7 @@ trait McpStudio
     private function gpuState(): array
     {
         $s = $this->gpu()->status(); $w = $s['worker'];
-        $out = ['on'=>$w !== null,'queued'=>$s['queued'],'running'=>$s['running'],'idle_minutes'=>$s['idle_minutes'],'token_made'=>$s['token'] !== null,'notebook'=>$s['notebook']];
+        $out = ['on'=>$w !== null,'queued'=>$s['queued'],'running'=>$s['running'],'idle_minutes'=>$s['idle_minutes'],'pictures'=>$this->gpuPictures(),'token_made'=>$s['token'] !== null,'notebook'=>$s['notebook']];
         if ($w !== null) $out['worker'] = ['gpu'=>$w['gpu'] ?? null,'vram_gb'=>$w['vram'] ?? null,'phase'=>$w['phase'] ?? null,'message'=>$w['message'] ?? null,'models_loaded'=>$w['loaded'] ?? null,
             'making'=>$w['making'] ?? null,'progress'=>$w['progress'] ?? null,'stopping'=>$w['stopping'],'turns_off_at'=>is_int($w['off_at']) ? gmdate('c', $w['off_at']) : null];
         if ($s['last'] !== null) $out['last'] = ['ended'=>'The last notebook turned itself off: Colab gave it a GPU too small for the models ('.$s['last']['gpu'].'). Choose an A100 or a G4 in Colab.','at'=>gmdate('c', $s['last']['at'])];
@@ -701,6 +733,24 @@ trait McpStudio
         if (!is_int($minutes)) throw new HttpError(422, 'minutes must be one of '.implode(', ', Gpu::IDLE_CHOICES).'.');
         $this->gpu()->setIdleMinutes($minutes);
         return self::answer(['idle_minutes'=>$minutes]);
+    }
+
+    private function setGpuPictures(array $args): array
+    {
+        if (!is_bool($args['jpeg'] ?? null)) throw new HttpError(422, 'jpeg must be true or false.');
+        $quality = $args['quality'] ?? null;
+        if ($quality !== null && !is_int($quality)) throw new HttpError(422, 'quality must be a whole number from '.Gpu::JPEG_QUALITY[0].' to '.Gpu::JPEG_QUALITY[1].'.');
+        $this->gpu()->setPictureFormat($args['jpeg'], $quality);
+        return self::answer(['pictures'=>$this->gpuPictures()]);
+    }
+
+    /** How the notebook saves the pictures, as the MCP client reads it. */
+    private function gpuPictures(): array
+    {
+        $f = $this->gpu()->pictureFormat();
+        return ['jpeg'=>$f['jpeg'], 'jpeg_quality'=>$f['quality'], 'note'=>$f['jpeg']
+            ? 'GPU pictures that would be PNG are saved as JPEG at quality '.$f['quality'].'; a request that asks for jpeg or webp keeps its own.'
+            : 'GPU pictures are saved in the format each request asks for (png unless it asks for jpeg or webp).'];
     }
 
     private function saveLora(array $args): array

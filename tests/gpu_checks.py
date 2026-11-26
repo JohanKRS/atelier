@@ -332,9 +332,25 @@ run.wait()
 done = job(owner, skipped)
 item = request('detail&id=' + done['image_ids'][0])[1]['image']
 check(done['status'] == 'completed' and not item.get('planned_prompt') and item.get('planning_skipped') == 'failed', 'when the expander fails the picture is made from the prompt as written')
+# Settings › GPU › Save the pictures as JPEG: a picture that would be a PNG comes as a JPEG at the quality chosen, saved by
+# the worker before it sends it.
+check(request('gpu')[1]['pictures'] == {'jpeg': False, 'quality': 85, 'range': [50, 100]}, 'the page reads how the GPU saves the pictures')
+check(request('gpu-pictures', {'jpeg': True, 'quality': 30})[0] == 422, 'a JPEG quality under 50 is refused')
+code, status = request('gpu-pictures', {'jpeg': True, 'quality': 85})
+check(code == 200 and status['pictures']['jpeg'] is True and status['pictures']['quality'] == 85, 'JPEG at 85 can be turned on')
+compact = new_id()
+request('create', {'id': compact, 'prompt': 'A wide harbor at noon', 'options': {'model': 'minimax-h3-image', 'quality': 'low', 'size': '2400x1600', 'format': 'png', 'thinking': 'off'}})
+run = Run(token, engine=w.FakeImage(steps=1, pause=0.05), max_jobs=1)
+check(run.wait() == 'done', 'the worker makes it')
+done = job(owner, compact)
+item = request('detail&id=' + done['image_ids'][0])[1]['image']
+saved = owner.client.open(base + '/index.php?action=image&id=' + done['image_ids'][0]).read()
+check(item['mime'] == 'image/jpeg' and saved[:3] == b'\xff\xd8\xff' and item['options']['format'] == 'jpeg' and item['options']['compression'] == 85,
+      'a request for a PNG comes as a JPEG at 85, and its details say so')
+check(request('gpu-pictures', {'jpeg': False})[1]['pictures'] == {'jpeg': False, 'quality': 85, 'range': [50, 100]}, 'turned off again, keeping the quality')
 check(gpu('hello', {}, token=token)[1]['recent'] == 'h3-image', 'a worker that starts with nothing waiting loads the model used last')
 check(request('gpu-lora-delete', {'id': lora})[0] == 200 and not request('gpu-loras')[1]['loras'], 'a LoRA leaves the list')
-for made in (painted, expanding, skipped):
+for made in (painted, expanding, skipped, compact):
     for made_id in job(owner, made)['image_ids']:
         request('trash', {'id': made_id})
         request('purge', {'id': made_id})

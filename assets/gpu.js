@@ -119,6 +119,10 @@ export function createGpu(ctx) {
     const idle = $('#gpu-idle');
     if (idle.options.length !== status.idle_choices.length) idle.replaceChildren(...status.idle_choices.map(m => h('option', { value: String(m) }, t('{n} minutes without requests', { n: number(m) }))));
     if (document.activeElement !== idle) idle.value = String(status.idle_minutes);
+    const pictures = status.pictures || { jpeg: false, quality: 85 }, quality = $('#gpu-quality');
+    $('#gpu-jpeg').checked = !!pictures.jpeg; $('#gpu-quality-wrap').hidden = !pictures.jpeg;
+    if (pictures.range) { quality.min = String(pictures.range[0]); quality.max = String(pictures.range[1]); }
+    if (document.activeElement !== quality) { quality.value = String(pictures.quality); $('#gpu-quality-value').textContent = number(pictures.quality); }
     $('#gpu-license').textContent = [engine()?.license, ...Object.values(status.image_engines || {}).map(e => e.license)].filter(Boolean).join(' ');
     renderLoras();
   }
@@ -152,6 +156,14 @@ export function createGpu(ctx) {
     try { gpu.status = await api('gpu-idle', { minutes: Number(e.target.value) }); render(); toast(t('Saved.')); }
     catch (err) { toast(err.message, { tone: 'error' }); }
   };
+  // How the notebook saves the pictures: as JPEG at this quality instead of PNG, or as each request asks.
+  async function savePictures() {
+    try { gpu.status = await api('gpu-pictures', { jpeg: $('#gpu-jpeg').checked, quality: Number($('#gpu-quality').value) }); render(); toast(t('Saved.')); }
+    catch (err) { toast(err.message, { tone: 'error' }); render(); }
+  }
+  $('#gpu-jpeg').onchange = savePictures;
+  $('#gpu-quality').oninput = e => { $('#gpu-quality-value').textContent = number(Number(e.target.value)); };
+  $('#gpu-quality').onchange = savePictures;
   $('#gpu-chip').onclick = () => showSettings('gpu');
   $('#settings-dialog').addEventListener('close', () => { $('#gpu-token-output').replaceChildren(); $('#gpu-token-output').hidden = true; });
   async function stop() {
@@ -617,5 +629,7 @@ export function createGpu(ctx) {
     /** What a video request asked for, as rows of its details (before the seed, the GPU and the time). */
     rows,
     worker, summary, engine,
+    /** How the notebook saves the pictures (Settings › GPU): jpeg and its quality. Null until the GPU's state is known. */
+    pictures: () => gpu.status?.pictures || null,
   };
 }

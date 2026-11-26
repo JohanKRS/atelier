@@ -129,8 +129,13 @@ final class Jobs
             $cleaned = $cleaned === null ? $cleanFirst : self::strongestClean([$cleaned, $cleanFirst]);
         }
         Images::requireKey($this->vault, $key, $options['model']);
-        // An open model on the GPU worker: the request waits in line for it, with what each LoRA chosen is.
-        if ($provider === 'gpu') $options['loras'] = (new Gpu($this->vault, $this->config))->resolveLoras($options['loras'], $options['engine'], $key);
+        // An open model on the GPU worker: the request waits in line for it, with what each LoRA chosen is, in the format
+        // the worker saves the picture in (a PNG as a JPEG when Settings › GPU says so).
+        if ($provider === 'gpu') {
+            $gpu = new Gpu($this->vault, $this->config);
+            $options['loras'] = $gpu->resolveLoras($options['loras'], $options['engine'], $key);
+            $options = $gpu->pictureOptions($options);
+        }
         $payload = ['prompt'=>$prompt,'options'=>$options,'references'=>$references,'parent_ids'=>array_values(array_unique($parents)),'mask'=>$mask,
             'parent_id'=>$parent,'operation'=>$operation,'label'=>$label,'image_ids'=>[],'error'=>null];
         if ($provider === 'gpu') $payload['kind'] = 'image';
@@ -346,7 +351,11 @@ final class Jobs
         $before = $p['options']['loras'] ?? [];
         $p['options'] = Images::options($n === null ? $p['options'] : array_merge($p['options'], ['n'=>$n]));
         Images::requireKey($this->vault, $key, $p['options']['model']);
-        if ($gpu) $p['options']['loras'] = (new Gpu($this->vault, $this->config))->resolveLoras($p['options']['loras'], $p['options']['engine'], $key, is_array($before) ? $before : []);
+        if ($gpu) {
+            $worker = new Gpu($this->vault, $this->config);
+            $p['options']['loras'] = $worker->resolveLoras($p['options']['loras'], $p['options']['engine'], $key, is_array($before) ? $before : []);
+            $p['options'] = $worker->pictureOptions($p['options']);
+        }
         if (!empty($p['parent_id'])) {
             try { $this->vault->image((string)$p['parent_id'], $key, true); } catch (HttpError) { $p['parent_id'] = null; $p['operation'] = 'generate'; }
         }
