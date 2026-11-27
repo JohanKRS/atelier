@@ -131,7 +131,7 @@ TEXT;
                         .'To say what to take from each reference image, cite it as @1, @2… in the order of reference_image_ids (e.g. "the face from @1 wearing the jacket from @2").'],
                     'size'=>$size + ['default'=>'1:1'],'quality'=>$quality,'model'=>$model,
                     'background'=>['type'=>'string','enum'=>['auto','opaque','transparent'],'description'=>'transparent needs png or webp.'],
-                    'format'=>['type'=>'string','enum'=>['png','jpeg','webp'],'description'=>'File format. Default png.'],
+                    'format'=>['type'=>'string','enum'=>['png','jpeg','webp'],'description'=>'File format. Default png. On the GPU model, png comes as jpeg when Settings › GPU saves its pictures as JPEG (gpu_status, set_gpu_pictures).'],
                     'n'=>$n,'vary'=>$vary,'lines'=>$lines,'reference_image_ids'=>$refs,'title'=>$title,
                     'planning'=>$f['planning'],'complexity'=>$f['complexity'],'loras'=>$f['loras'],'seed'=>$f['seed'],'album_id'=>$f['album'],
                 ],'required'=>['prompt']]],

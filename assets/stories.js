@@ -73,9 +73,9 @@ export function createStories(ctx) {
     rendered: () => { renderSide(); renderDoc(); } });
   // What the section's page says, for stories and for visual novels.
   const HOME = {
-    story: { title: t('Stories'), hint: t('Written with Claude or GPT, planned from beginning to end, one chapter at a time.'), create: t('New story'), fresh: t('New story'),
+    story: { title: t('Stories'), create: t('New story'), fresh: t('New story'),
       empty: t('No stories yet'), emptyHint: t('Create one and tell the writer the idea.'), hash: '#historias' },
-    vn: { title: 'Visual Novel', hint: t('A script with choices, routes and endings; sprites and backgrounds from the sheets; a playable preview and export to Ren\'Py.'), create: t('New visual novel'), fresh: t('New visual novel'),
+    vn: { title: 'Visual Novel', create: t('New visual novel'), fresh: t('New visual novel'),
       empty: t('No visual novels yet'), emptyHint: t('Create one and bring your documents (design, chapters, characters), or tell the writer the idea.'), hash: '#vn' },
   };
   const homeOf = () => HOME[st.kind] || HOME.story;
@@ -83,7 +83,7 @@ export function createStories(ctx) {
   const hashOf = id => `${homeOf().hash}/${id}`;
   function renderHome() {
     const home = homeOf();
-    $('#stories-title').textContent = home.title; $('#stories-hint').textContent = home.hint; $('#story-new-label').textContent = home.create;
+    $('#stories-title').textContent = home.title; $('#story-new-label').textContent = home.create;
     $('#stories-empty-title').textContent = home.empty; $('#stories-empty-hint').textContent = home.emptyHint;
   }
 

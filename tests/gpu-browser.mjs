@@ -36,6 +36,7 @@ await call('settings', { api_key: 'sk-test-placeholder-for-unit-tests' });
 const first = (await call('import', { data: await png(200, 90, 40), name: 'Praia' })).image;
 await call('import', { data: await png(40, 90, 200), name: 'Mar' });
 await call('gpu-revoke', {});
+await call('gpu-pictures', { jpeg: false, quality: 85 });
 // Requests that ended without a result in earlier runs leave the feed, so the feed shows only this run's.
 for (const job of (await page.evaluate(async () => (await (await fetch('index.php?action=jobs')).json()).jobs)) || []) if (!['queued', 'running', 'completed'].includes(job.status)) await call('dismiss', { id: job.id });
 await page.reload(); await page.locator('#application').waitFor();
@@ -254,6 +255,16 @@ await page.locator('#lora-save').click();
 await page.waitForFunction(() => /força 0,5/.test(document.querySelectorAll('#lora-list .lora-row')[1]?.textContent || ''));
 assert.match(await page.locator('#lora-list .lora-row').nth(1).innerText(), /Nanquim[\s\S]*civitai\.com\/api\/download\/models\/67890/);
 await shot('settings-gpu-loras', page.locator('#settings-dialog'));
+// Save the pictures as JPEG: off at first; on, at 85, with the quality to change.
+await page.locator('#gpu-pictures-card').scrollIntoViewIfNeeded();
+assert.ok(!(await page.locator('#gpu-jpeg').isChecked()) && await page.locator('#gpu-quality-wrap').isHidden(), 'PNG at first, with no quality to choose');
+await page.locator('#gpu-pictures-card .switch').click();
+assert.ok(await page.locator('#gpu-jpeg').isChecked());
+await page.locator('#gpu-quality-wrap').waitFor();
+assert.equal(await page.locator('#gpu-quality-value').innerText(), '85');
+await page.waitForFunction(async () => (await (await fetch('index.php?action=gpu')).json()).pictures?.jpeg === true);
+assert.match(await page.locator('#gpu-pictures-card').innerText(), /Salvar as imagens em JPEG[\s\S]*Qualidade do JPEG[\s\S]*várias vezes menor/);
+await shot('settings-gpu-jpeg', page.locator('#gpu-pictures-card'));
 await page.keyboard.press('Escape');
 
 // The composer: H3-Image is one more model, with its megapixels, MiniMax's expander and the LoRAs.
@@ -273,7 +284,18 @@ await page.locator('#loras select').selectOption({ label: 'watercolor style v2' 
 await page.locator('#loras .lora-chosen').waitFor();
 assert.equal(await page.locator('#loras .lora-chosen input[type=range]').inputValue(), '0.8', 'a LoRA starts at its own strength');
 await page.locator('#loras .lora-chosen input[type=range]').fill('0.6');
+// More options › Format says that the PNG comes as a JPEG on the GPU, and only for the GPU's model.
+const moreOpen = await page.locator('#more-options').evaluate(d => d.open);
+await page.locator('#more-options').evaluate(d => { d.open = true; });
+await page.locator('#format').selectOption('png');
+await page.locator('#format-gpu-note').waitFor();
+assert.match(await page.locator('#format-gpu-note').innerText(), /Na GPU, o PNG é salvo em JPEG com qualidade 85/);
+await page.locator('#format').selectOption('webp');
+assert.ok(await page.locator('#format-gpu-note').isHidden(), 'not when the request asks for WebP itself');
+await page.locator('#format').selectOption('png');
+await page.locator('#format-gpu-note').waitFor();
 await shot('composer-h3-image', page.locator('.composer'));
+await page.locator('#more-options').evaluate((d, open) => { d.open = open; }, moreOpen);
 await page.locator('#prompt').fill('Um gato malhado de chapéu vermelho, aquarela');
 const composerCount = await page.locator('#quantity').inputValue();
 await page.locator('#quantity').selectOption('1');
@@ -281,6 +303,7 @@ await page.locator('#generate').click();
 const picture = await madePicture(j => j.operation !== 'edit');
 assert.equal(picture.options.model, 'minimax-h3-image');
 assert.deepEqual(picture.options.loras.map(l => [l.name, l.strength]), [['watercolor style v2', 0.6]], 'the LoRA went with its strength');
+assert.ok(picture.options.format === 'jpeg' && picture.options.compression === 85, 'and the PNG asked for is saved as a JPEG at 85');
 const pictureId = picture.image_ids[0];
 await page.goto(`${base}/#v/${pictureId}`);
 await page.locator('#viewer[open]').waitFor();
@@ -289,6 +312,9 @@ const details = await page.locator('#info-details').innerText();
 assert.match(details, /MiniMax H3-Image · GPU/);
 assert.match(details, /Expansor da MiniMax/);
 assert.match(details, /watercolor style v2 \(0,6\)/);
+assert.match(details, /JPEG, qualidade 85/);
+const saved = await page.evaluate(async id => (await (await fetch(`index.php?action=detail&id=${id}`)).json()).image.mime, pictureId);
+assert.equal(saved, 'image/jpeg', 'the file is a JPEG');
 assert.match(await page.locator('#info-planned').textContent(), /^Expanded \(t2i\)/, 'the expander\'s prompt is shown');
 
 // The edit panel: the same model, with its own LoRAs, makes a new version of the picture.
@@ -317,6 +343,7 @@ await page.locator('#edit-quantity').selectOption(editCount);
 await page.locator('#edit-model').selectOption(composerModel);
 await page.locator('#edit-advanced-mode').setChecked(wasAdvanced, { force: true });
 
+await call('gpu-pictures', { jpeg: false });
 // Turning it off from Atelier.
 await page.goto(base); await page.locator('#application').waitFor();
 await page.locator('#model').selectOption(composerModel, { force: true }).catch(() => {});

@@ -159,6 +159,37 @@ try{
     $claimed=$jobs->claimGpu([],$key);
     check(str_contains($claimed['prompt'],'Direction for this image'),'the others get their direction');
 
+    // ---------------------------------------------------------------------------------------------------------------
+    // How the worker saves the picture: as each request asks, or a PNG as a JPEG at the quality of Settings › GPU.
+    check($gpu->pictureFormat()===['jpeg'=>false,'quality'=>85]&&$gpu->status()['pictures']===['jpeg'=>false,'quality'=>85,'range'=>[50,100]],'at first each request has its own format, with 85 ready for JPEG');
+    $plain=$jobs->create(['id'=>id(),'prompt'=>'a field','options'=>['model'=>MODEL,'format'=>'png']],$key)[0];
+    check($plain['options']['format']==='png','so a PNG stays a PNG');
+    $gpu->setPictureFormat(true);
+    check($gpu->pictureFormat()===['jpeg'=>true,'quality'=>85],'JPEG can be turned on, at 85 unless told otherwise');
+    $big=$jobs->create(['id'=>id(),'prompt'=>'Recreate this same image at a higher resolution.','operation'=>'upscale','parent_id'=>$source['id'],'references'=>[['id'=>$source['id']]],
+        'options'=>['model'=>MODEL,'format'=>'png','compression'=>90,'size'=>'4000x3000','thinking'=>'off']],$key)[0];
+    check($big['options']['format']==='jpeg'&&$big['options']['compression']===85,'then an upscale that would be a PNG is saved as a JPEG at 85');
+    $edit=$jobs->create(['id'=>id(),'prompt'=>'Make @1 at night','parent_id'=>$source['id'],'references'=>[['id'=>$source['id']]],'options'=>['model'=>MODEL]],$key)[0];
+    check($edit['options']['format']==='jpeg'&&$edit['options']['compression']===85,'and so is an edit, with no format given');
+    $own=$jobs->create(['id'=>id(),'prompt'=>'a field','options'=>['model'=>MODEL,'format'=>'webp','compression'=>70]],$key)[0];
+    $jpeg=$jobs->create(['id'=>id(),'prompt'=>'a field','options'=>['model'=>MODEL,'format'=>'jpeg','compression'=>95]],$key)[0];
+    check($own['options']['format']==='webp'&&$own['options']['compression']===70&&$jpeg['options']['format']==='jpeg'&&$jpeg['options']['compression']===95,'a request that asks for WebP or JPEG itself keeps its own');
+    $again=$jobs->retry(id(),$plain['id'],null,$key)[0];
+    check($again['options']['format']==='jpeg'&&$again['options']['compression']===85,'repeating a PNG request now makes a JPEG');
+    $gpu->setPictureFormat(true,70);
+    check($gpu->pictureFormat()['quality']===70&&$jobs->create(['id'=>id(),'prompt'=>'a field','options'=>['model'=>MODEL]],$key)[0]['options']['compression']===70,'the quality can be changed');
+    $gpu->setPictureFormat(false);
+    check($gpu->pictureFormat()===['jpeg'=>false,'quality'=>70]&&$jobs->create(['id'=>id(),'prompt'=>'a field','options'=>['model'=>MODEL]],$key)[0]['options']['format']==='png','turned off, PNG again, and the quality is kept for next time');
+    rejects(fn()=>$gpu->setPictureFormat(true,49),'a quality from 50',422);
+    rejects(fn()=>$gpu->setPictureFormat(true,101),'up to 100',422);
+    rejects(fn()=>$gpu->setPictureFormat(true,'85.5'),'a whole number',422);
+    check($gpu->pictureFormat()===['jpeg'=>false,'quality'=>70],'a refused change changes nothing');
+    $gpu->setPictureFormat(true,85);
+    $mine=$gpu->pictureFormat();
+    $other=$users->create('Outra','test-password-long-enough',random_bytes(32));
+    $vault->useOwner($other['id']); $theirs=(new Gpu($vault))->pictureFormat(); $vault->useOwner($owner['id']);
+    check($mine['jpeg']===true&&$theirs['jpeg']===false,'each account has its own');
+
     // Not through the writer; MCP offers them, as requests that wait for the notebook (tests/mcp_tools.php)
     rejects(fn()=>Studio\Writer::settings(['image_model'=>MODEL]),'the writer does not use the GPU\'s models',422);
     $tools=Studio\Mcp::tools(); $enum=null;

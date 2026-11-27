@@ -47,7 +47,7 @@ try {
     $tools = Mcp::tools(); $names = array_column($tools, 'name');
     check(array_slice($names, 0, 7) === ['generate_image','edit_image','upscale_image','list_images','get_image','import_image','check_requests'] && count($names) === count(array_unique($names)), 'the tools keep their order and every name is unique');
     foreach (['clean_image','crop_image','expand_image','photoreal_image','enhance_image','update_image','trash_images','delete_images','list_albums','create_album','update_album','delete_album',
-        'stack_images','unstack_images','reorder_images','cancel_request','retry_request','gpu_status','stop_gpu','set_gpu_idle','list_loras','save_lora','delete_lora',
+        'stack_images','unstack_images','reorder_images','cancel_request','retry_request','gpu_status','stop_gpu','set_gpu_idle','set_gpu_pictures','convert_to_jpeg','list_loras','save_lora','delete_lora',
         'generate_video','improve_video_prompt','get_video','duplicate_story','favorite_story','delete_story'] as $name) check(in_array($name, $names, true), "MCP offers $name");
     check(array_search('delete_story', $names, true) < array_search('list_stories', $names, true), 'and the studio\'s tools come before the stories\'');
     check(in_array('minimax-h3-image', array_column($tools, 'inputSchema', 'name')['generate_image']['properties']['model']['enum'], true), 'the GPU model can be chosen');
@@ -150,6 +150,16 @@ try {
     $state = $tool('gpu_status', [])['data'];
     check($state['on'] === false && $state['queued'] >= 2 && $state['token_made'] === true && str_contains($state['note'], 'Colab'), 'gpu_status says the GPU is off and what waits for it');
     check($tool('set_gpu_idle', ['minutes'=>30])['data']['idle_minutes'] === 30 && $gpu->status()['idle_minutes'] === 30 && $failed($tool('set_gpu_idle', ['minutes'=>7])), 'the idle minutes can be set to the page\'s choices');
+    check($state['pictures']['jpeg'] === false && $state['pictures']['jpeg_quality'] === 85, 'gpu_status says how the pictures are saved');
+    $set = $tool('set_gpu_pictures', ['jpeg'=>true])['data']['pictures'];
+    check($set['jpeg'] === true && $set['jpeg_quality'] === 85 && $gpu->pictureFormat() === ['jpeg'=>true,'quality'=>85] && $tool('gpu_status', [])['data']['pictures']['jpeg'] === true, 'set_gpu_pictures turns JPEG on, at 85, as Settings › GPU does');
+    check($tool('set_gpu_pictures', ['jpeg'=>true,'quality'=>90])['data']['pictures']['jpeg_quality'] === 90 && $failed($tool('set_gpu_pictures', ['jpeg'=>true,'quality'=>30])) && $failed($tool('set_gpu_pictures', ['jpeg'=>'yes']))
+        && $gpu->pictureFormat() === ['jpeg'=>true,'quality'=>90], 'with a quality from 50 to 100, and a yes or no');
+    $small = $tool('generate_image', ['prompt'=>'a quiet harbor', 'model'=>'minimax-h3-image'])['data']['requests'][0];
+    $smallJob = $jobs->freshJob($small['request_id'], $key);
+    check($smallJob['options']['format'] === 'jpeg' && $smallJob['options']['compression'] === 90, 'and a GPU picture asked for through MCP is then saved as that JPEG');
+    $tool('cancel_request', ['request_id'=>$small['request_id']]);
+    $gpu->setPictureFormat(false);
     check($tool('stop_gpu', [])['data']['asked'] === true, 'the GPU can be asked to turn off');
     $cancelled = $tool('cancel_request', ['request_id'=>$r['request_id']]);
     check($cancelled['data']['request']['status'] === 'cancelled', 'a request waiting for the GPU can be cancelled');
@@ -204,6 +214,40 @@ try {
     check($tool('trash_images', ['image_ids'=>[$other['id']], 'restore'=>true])['data']['count'] === 1 && $tool('trash_images', ['image_ids'=>[$other['id']]])['data']['count'] === 1, 'and takes them back out');
     check($tool('delete_images', ['image_ids'=>[$other['id']]])['data']['deleted'] === 1 && $tool('list_images', ['trash'=>true])['data']['total'] === 0, 'delete_images deletes what is in the trash, for good');
     check(str_contains($tool('delete_album', ['album_id'=>$album['album_id']])['data']['note'], 'stay') && $vault->albums($key) === [] && $vault->image($source['id'], $key)['id'] === $source['id'], 'delete_album leaves its items');
+
+    // Converter para JPEG: a PNG or WebP of the library becomes a JPEG in place, much smaller, and keeps the rest.
+    $photo8k = imagecreatetruecolor(900, 600);
+    for ($y = 0; $y < 600; $y++) for ($x = 0; $x < 900; $x++) imagesetpixel($photo8k, $x, $y, (($x * 255 / 899) << 16) | (($y * 255 / 599) << 8) | mt_rand(0, 255));
+    $photoPng = png($photo8k); imagedestroy($photo8k);
+    $big = $vault->saveImage($photoPng, ['title'=>'Praia','prompt'=>'a beach','original_prompt'=>'a beach','options'=>OpenAI::options(['size'=>'1536x1024']) + ['format'=>'png'],'parent_ids'=>[]], $key);
+    $kept = $tool('create_album', ['name'=>'Praias', 'image_ids'=>[$big['id']]])['data'];
+    $tool('update_image', ['image_id'=>$big['id'], 'favorite'=>true]);
+    check($long('convert_to_jpeg', ['image_ids'=>[$big['id']]]), 'convert_to_jpeg is streamed, as a picture of 40 MP takes a few seconds');
+    $conv = $tool('convert_to_jpeg', ['image_ids'=>[$big['id']], 'quality'=>80])['data'];
+    $file = $vault->bytes($big['id'], 'full', $key); $info = getimagesizefromstring($file); $after = $vault->image($big['id'], $key);
+    check($conv['quality'] === 80 && $conv['converted'][0]['id'] === $big['id'] && $conv['converted'][0]['from'] === 'png' && $conv['converted'][0]['bytes_before'] === strlen($photoPng)
+        && $conv['converted'][0]['bytes_after'] === strlen($file) && strlen($file) * 2 < strlen($photoPng) && !isset($conv['skipped']), 'convert_to_jpeg turns a PNG into a JPEG several times smaller, and says by how much');
+    check($info['mime'] === 'image/jpeg' && [$info[0], $info[1]] === [900, 600] && $after['mime'] === 'image/jpeg' && $after['width'] === 900 && $after['height'] === 600, 'the library file is that JPEG now, at the same size');
+    check($after['converted']['from'] === 'png' && $after['converted']['quality'] === 80 && $after['converted']['bytes'] === strlen($photoPng) && $after['options']['format'] === 'jpeg' && $after['options']['compression'] === 80, 'and the details say what it was and how it was converted');
+    check($after['title'] === 'Praia' && $after['prompt'] === 'a beach' && $after['favorite'] === true && $tool('list_images', ['album_id'=>$kept['album_id']])['data']['total'] === 1
+        && getimagesizefromstring($vault->bytes($big['id'], 'thumb', $key)) !== false, 'its title, prompt, favorite, album and thumbnail stay as they were');
+    $again = $tool('convert_to_jpeg', ['image_ids'=>[$big['id'], $clipItem['id']]])['data'];
+    check($again['converted'] === [] && count($again['skipped']) === 2 && str_contains($again['skipped'][0]['reason'], 'already a JPEG') && str_contains($again['skipped'][1]['reason'], 'video'), 'a JPEG and a video are skipped, with the reason');
+    $clear = imagecreatetruecolor(64, 64); imagealphablending($clear, false); imagesavealpha($clear, true); imagefill($clear, 0, 0, imagecolorallocatealpha($clear, 0, 0, 0, 127));
+    imagefilledrectangle($clear, 16, 16, 47, 47, imagecolorallocate($clear, 200, 30, 30)); $clearPng = png($clear); imagedestroy($clear);
+    $sticker = $vault->saveImage($clearPng, ['title'=>'Adesivo','prompt'=>'a sticker','original_prompt'=>'a sticker','options'=>OpenAI::options(['size'=>'1024x1024','background'=>'transparent']),'parent_ids'=>[]], $key);
+    check(str_contains($tool('convert_to_jpeg', ['image_ids'=>[$sticker['id']]])['data']['skipped'][0]['reason'], 'transparent') && $vault->image($sticker['id'], $key)['mime'] === 'image/png', 'a picture with a transparent background stays a PNG');
+    $flat = imagecreatefromstring(Studio\Picture::jpeg($clearPng, 90));
+    $corner = imagecolorat($flat, 2, 2); $middle = imagecolorat($flat, 32, 32);
+    check(($corner >> 16 & 0xFF) > 245 && ($corner & 0xFF) > 245 && ($middle >> 16 & 0xFF) > 180 && ($middle & 0xFF) < 70, 'a see-through pixel of a picture that is not a cutout is laid on white, as JPEG has no transparency');
+    $webp = imagecreatetruecolor(320, 200); for ($y = 0; $y < 200; $y++) for ($x = 0; $x < 320; $x++) imagesetpixel($webp, $x, $y, (30 + $x / 4) << 16 | 90 << 8 | mt_rand(120, 200)); ob_start(); imagewebp($webp, null, IMG_WEBP_LOSSLESS); $webpBytes = (string)ob_get_clean(); imagedestroy($webp);
+    $leaf = $vault->saveImage($webpBytes, ['title'=>'Folha','prompt'=>'a leaf','original_prompt'=>'a leaf','options'=>OpenAI::options(['size'=>'1024x1024']),'parent_ids'=>[]], $key);
+    $byDefault = $tool('convert_to_jpeg', ['image_ids'=>[$leaf['id']]])['data'];
+    check($byDefault['quality'] === $gpu->pictureFormat()['quality'] && $byDefault['converted'][0]['from'] === 'webp' && $vault->image($leaf['id'], $key)['mime'] === 'image/jpeg', 'a WebP converts too, at the JPEG quality of Settings › GPU when none is given');
+    $flatPng = imagecreatetruecolor(800, 800); imagefill($flatPng, 0, 0, imagecolorallocate($flatPng, 240, 240, 240)); $flatBytes = png($flatPng); imagedestroy($flatPng);
+    $plain = $vault->saveImage($flatBytes, ['title'=>'Liso','prompt'=>'a plain wall','original_prompt'=>'a plain wall','options'=>OpenAI::options(['size'=>'1024x1024']),'parent_ids'=>[]], $key);
+    check(str_contains($tool('convert_to_jpeg', ['image_ids'=>[$plain['id']]])['data']['skipped'][0]['reason'], 'would not be smaller') && $vault->bytes($plain['id'], 'full', $key) === $flatBytes, 'a picture that would not be smaller as a JPEG stays as it is');
+    check($failed($tool('convert_to_jpeg', ['image_ids'=>[$leaf['id']], 'quality'=>30])) && $failed($tool('convert_to_jpeg', ['image_ids'=>[]])), 'a quality out of 50 to 100, or no ids, is refused');
 
     // Requests: repeat one.
     $again = $tool('retry_request', ['request_id'=>$photo['data']['requests'][0]['request_id']]);

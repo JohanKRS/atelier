@@ -150,6 +150,35 @@ final class Picture
         throw new HttpError(422, $tooLarge);
     }
 
+    /**
+     * A PNG or WebP of the library as a JPEG at $quality (Converter para JPEG). A picture with see-through pixels is laid
+     * on white first, as JPEG has no transparency; a PNG whose header says it has none is not searched for them, so a
+     * picture of 40 MP takes a few seconds. Up to MAX_PIXELS, which a host's 512 MB of PHP memory holds.
+     */
+    public static function jpeg(string $bytes, int $quality): string
+    {
+        $info = @getimagesizefromstring($bytes);
+        if (!$info || $info[0] * $info[1] > self::MAX_PIXELS) throw new HttpError(422, t('Could not read the image.'));
+        // PNG: the colour type of IHDR (byte 25) is 4 or 6 with an alpha channel, and a tRNS chunk makes a colour clear.
+        $png = str_starts_with($bytes, "\x89PNG\r\n\x1a\n");
+        $mayHaveAlpha = !$png || in_array(ord($bytes[25] ?? "\0"), [4, 6], true) || str_contains(substr($bytes, 0, 65536), 'tRNS');
+        $image = @imagecreatefromstring($bytes);
+        if (!$image) throw new HttpError(422, t('Could not read the image.'));
+        if (!imageistruecolor($image)) imagepalettetotruecolor($image);
+        if ($mayHaveAlpha && self::hasAlpha($image)) {
+            $flat = imagecreatetruecolor(imagesx($image), imagesy($image));
+            imagefill($flat, 0, 0, imagecolorallocate($flat, 255, 255, 255));
+            imagealphablending($flat, true);
+            imagecopy($flat, $image, 0, 0, 0, 0, imagesx($image), imagesy($image));
+            imagedestroy($image); $image = $flat;
+        }
+        imageinterlace($image, false);
+        ob_start(); $ok = imagejpeg($image, null, max(1, min(100, $quality))); $out = (string)ob_get_clean();
+        imagedestroy($image);
+        if (!$ok || $out === '') throw new HttpError(500, t('Could not save the image.'));
+        return $out;
+    }
+
     /** A PNG mask, as the image API takes it (under 4 MB). */
     public static function maskUrl(\GdImage $mask): string
     {

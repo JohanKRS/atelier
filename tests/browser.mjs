@@ -2130,6 +2130,38 @@ assert.deepEqual(await columns(), { side: 420 });
 await page.locator('.composer > .col-handle').dblclick();
 await page.waitForFunction(() => Math.round(document.querySelector('.composer').getBoundingClientRect().width) === 340);
 assert.equal(await noOverflow(), true);
+// Converter para JPEG, in the details: a PNG of the library becomes a JPEG in place; a JPEG has no such button.
+const importPicture = type => page.evaluate(async type => {
+  const c = document.createElement('canvas'); c.width = 640; c.height = 480; const x = c.getContext('2d'), data = x.createImageData(640, 480);
+  for (let i = 0; i < data.data.length; i += 4) { const p = i / 4; data.data[i] = (p % 640) / 2.5; data.data[i + 1] = p / 640 / 2; data.data[i + 2] = 100 + Math.random() * 90; data.data[i + 3] = 255; }
+  x.putImageData(data, 0, 0);
+  const state = await (await fetch('index.php?action=state')).json();
+  const sent = await fetch('index.php?action=import', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf }, body: JSON.stringify({ data: c.toDataURL(type, 0.9), name: 'Praia' }) });
+  return (await sent.json()).image;
+}, type);
+const pngPicture = await importPicture('image/png'), jpegPicture = await importPicture('image/jpeg');
+assert.deepEqual([pngPicture.mime, jpegPicture.mime], ['image/png', 'image/jpeg']);
+await page.goto(`${base}/#v/${jpegPicture.id}`);
+await page.locator('#viewer[open]').waitFor();
+await page.locator('#info-details dt').first().waitFor();
+assert.ok(await page.locator('#convert-jpeg').isHidden(), 'a JPEG has nothing to convert');
+await page.goto(`${base}/#v/${pngPicture.id}`);
+await page.locator('#viewer[open]').waitFor();
+await page.locator('#convert-jpeg').waitFor();
+assert.equal(await page.locator('#convert-jpeg').innerText(), 'Converter para JPEG');
+await page.locator('#convert-jpeg').click();
+await page.locator('#confirm-dialog[open]').waitFor();
+assert.equal(await page.locator('#confirm-title').innerText(), 'Converter para JPEG?');
+assert.match(await page.locator('#confirm-message').innerText(), /^Esta imagem vira um JPEG com qualidade 85, várias vezes menor e sem diferença visível\. O PNG é substituído e não dá para trazer de volta\./);
+await page.locator('#confirm-yes').click();
+await page.waitForFunction(() => /^Convertida para JPEG: .+ viraram .+\.$/.test(document.querySelector('#toast-text').textContent), null, { timeout: 20000 });
+await page.locator('#info-details dt', { hasText: /^Convertida$/ }).waitFor();
+assert.match(await page.locator('#info-details').innerText(), /De PNG \([\d,]+ MB\) para JPEG com qualidade 85, em /);
+assert.ok(await page.locator('#convert-jpeg').isHidden(), 'and then there is nothing more to convert');
+const convertedFile = await page.evaluate(async id => { const r = await fetch(`index.php?action=image&id=${id}`); return [r.headers.get('Content-Type'), (await r.arrayBuffer()).byteLength]; }, pngPicture.id);
+assert.equal(convertedFile[0], 'image/jpeg', 'the library serves the JPEG');
+await page.keyboard.press('Escape');
+await page.locator('#viewer').waitFor({ state: 'hidden' });
 assert.deepEqual(errors, []);
 console.log('PASS browser: simple and advanced modes with quality levels, planning fallback, parallel generations with previews, request details from the card and the version panel, editing from the gallery, zoom and pan, masked edits (the circle of the brush, the image sent as it is), version tree and timeline (a deep tree inside its column, columns resized by dragging), one prompt box and one button for every edit request, an area made again without text, compare, expansion, a crop saved as a version and a crop extended in one request, upscale, cost estimates, photoreal and enhance edits from a panel with notes, cleaning before sending (remembered per account), the local cleanup as a version, upscale with cleanup, API balance (planning counted, corrected from the amount at the top), version cover, grouped gallery, stacks made by hand (videos too), hidden items and the Ocultas filter, search, favorites by version, import, paste, trash/restore/delete, a 40-image import loaded whole with the timeline, origin filters, orders, selection, albums, drag to reorder, bulk trash and delete, cancel, a plain notice when OpenAI has no credit left, dismiss with the × (failed requests leave the gallery by themselves and stay in Pedidos), one request per image, gallery reference picker and @ mentions, persisted options, version links, arrow keys between items and versions, full screen with edge-revealed controls, video upload with autoplay (muted, looping), hover previews, frame-by-frame stepping and saved frames, phone layout (pictures and videos across the whole width, one finger scrolls, two zoom), lock, accounts with separate libraries, MCP token.');
 await browser.close();

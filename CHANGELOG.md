@@ -4,6 +4,27 @@ What changed in each version of Atelier. Versions follow [Semantic Versioning](h
 
 To update an install, replace the app files with the ones from the new zip and keep `config.php`, `data-dir.php` (if present) and the data folder.
 
+## [1.7.0] - 2026-11-26
+
+### Pictures on the GPU
+
+- **Save the pictures as JPEG**, in **Settings › GPU**: the notebook saves the pictures that would be PNG as JPEG at the quality chosen there (85 to start, from 50 to 100) before sending them. A PNG of 8K or more takes tens of megabytes; the JPEG is several times smaller, with no difference to see at 85, and reaches the library sooner. It counts for new pictures, edits, **Upscale**, **Expand**, **Photoreal** and **Enhance** on the GPU, from the page and through MCP. A request that asks for JPEG or WebP itself keeps its own format and quality.
+- With MiniMax H3-Image and PNG chosen, **More options › Format** says the picture will come as a JPEG, and the details of a GPU picture show the JPEG or WebP quality it was saved at.
+
+### Library
+
+- **Convert to JPEG**, in the details of a picture saved as PNG or WebP: the file is replaced by a JPEG at the quality of **Settings › GPU** (85 unless changed), several times smaller with no difference to see; a GPU picture of 8K goes from tens of megabytes to a few. It asks first, as the PNG or WebP can't be brought back; the prompt, versions, albums and stacks stay as they are, and the details then say what the file was. Videos, JPEGs and pictures with a transparent background have no such button, and a picture that would not be smaller as a JPEG (a drawing of a few flat colours) stays as it is.
+
+### Stories and Visual Novel
+
+- The **Stories** and **Visual Novel** pages no longer have a line of text under the title. The one on **Stories** named only Claude and GPT, and the writer works with more models than those.
+- The **Stories** button at the top no longer says "written with Claude or GPT" when you hover it, and the `LEIA-ME.txt` of an exported story says the conversation went to the model, not to Claude or GPT.
+
+### MCP
+
+- `set_gpu_pictures` turns JPEG on or off for the GPU's pictures and sets its quality, as **Settings › GPU** does, and `gpu_status` says how they are saved.
+- `convert_to_jpeg` converts up to 20 library pictures to JPEG in place, as **Convert to JPEG** does, and says how much smaller each one got and which ones were skipped and why.
+
 ## [1.6.0] - 2026-11-25
 
 ### MCP
@@ -147,6 +168,7 @@ The first public release.
 - English and Brazilian Portuguese.
 - PHP 8.2 or newer with SQLite, no build step. Long requests keep going in the background, or in a separate process (`bin/worker.php`) on hosts that stop web processes early.
 
+[1.7.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.7.0
 [1.6.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.6.0
 [1.5.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.5.0
 [1.4.3]: https://github.com/JohanKRS/atelier/releases/tag/v1.4.3

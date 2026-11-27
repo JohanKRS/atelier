@@ -60,7 +60,7 @@ $iconVersion = Studio\iconVersion();
     <a class="brand" href="./"><img src="assets/icon.svg?v=<?= $iconVersion ?>" alt="" width="26" height="26"><span>Atelier</span></a>
     <div class="segmented section-switch" role="group" aria-label="<?= e('Section') ?>">
       <button type="button" data-section="images" aria-pressed="true" title="<?= e('Images') ?>"><span data-icon="image"></span><span><?= e('Images') ?></span></button>
-      <button type="button" data-section="stories" aria-pressed="false" title="<?= e('Stories written with Claude or GPT') ?>"><span data-icon="book"></span><span><?= e('Stories') ?></span></button>
+      <button type="button" data-section="stories" aria-pressed="false" title="<?= e('Stories') ?>"><span data-icon="book"></span><span><?= e('Stories') ?></span></button>
       <button type="button" data-section="vn" aria-pressed="false" title="<?= e('Visual novels: a script with choices, routes and endings, sprites, backgrounds, a playable preview and Ren\'Py') ?>"><span data-icon="dialogue"></span><span>Visual Novel</span></button>
     </div>
     <span class="grow"></span>
@@ -139,6 +139,7 @@ from behind, looking at the sea') ?>"></textarea></label>
                 <label><?= e('Background') ?><select id="background"><option value="auto"><?= e('Automatic', ['ctx' => 'background']) ?></option><option value="opaque"><?= e('Opaque') ?></option><option value="transparent"><?= e('Transparent') ?></option></select></label>
               </div>
               <label id="compression-wrap" hidden><?= e('Compression') ?><span class="range-row"><input type="range" id="compression" min="0" max="100" value="90"><output id="compression-value">90</output></span></label>
+              <p id="format-gpu-note" class="hint" hidden></p>
               <div class="row2">
                 <label><?= e('Previews') ?><select id="previews"><option value="0"><?= e('Off', ['ctx' => 'previews']) ?></option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label>
                 <label><?= e('Moderation') ?><select id="moderation"><option value="low"><?= e('Low') ?></option><option value="auto"><?= e('Automatic') ?></option></select></label>
@@ -219,7 +220,7 @@ from behind, looking at the sea') ?>"></textarea></label>
   <div class="stories" id="stories-view" hidden>
     <section class="stories-home" id="stories-home">
       <div class="stories-head">
-        <div><h2 id="stories-title"><?= e('Stories') ?></h2><p class="hint" id="stories-hint"><?= e('Written with Claude or GPT, planned from beginning to end, one chapter at a time.') ?></p></div>
+        <h2 id="stories-title"><?= e('Stories') ?></h2>
         <span class="grow"></span>
         <button type="button" id="stories-history" class="btn ghost small" title="<?= e('History: everything you asked for, the messages to the writer and the images') ?>"><span data-icon="history"></span><span><?= e('History') ?></span></button>
         <label class="btn ghost small" id="story-import" title="<?= e('A story downloaded from here as a .zip, which comes in as a new story. A zip with only chapters in Markdown (.md) also works.') ?>"><span data-icon="upload"></span><span><?= e('Import') ?></span><input id="story-import-input" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden></label>
@@ -640,6 +641,7 @@ from behind, looking at the sea') ?>"></textarea></label>
             <button type="button" id="regenerate" class="btn secondary small"><span data-icon="redo"></span><?= e('Generate again') ?></button>
             <button type="button" id="as-reference" class="btn secondary small"><span data-icon="image-plus"></span><?= e('Use as reference') ?></button>
             <button type="button" id="open-video" class="btn secondary small" hidden><span data-icon="video"></span><?= e('Open in the video') ?></button>
+            <button type="button" id="convert-jpeg" class="btn secondary small" hidden title="<?= e('Replace this PNG or WebP with a JPEG, several times smaller') ?>"><span data-icon="image"></span><?= e('Convert to JPEG') ?></button>
           </div>
           <dl id="info-details" class="details"></dl>
         </section>
@@ -858,6 +860,11 @@ from behind, looking at the sea') ?>"></textarea></label>
         <div class="settings-card stack">
           <label><?= e('Turn the GPU off after') ?><select id="gpu-idle"></select></label>
           <p class="hint"><?= e('Minutes without requests. Each session downloads and loads the models again (a few minutes), so a longer wait is better while you are still making videos or pictures.') ?></p>
+        </div>
+        <div class="settings-card stack" id="gpu-pictures-card">
+          <label class="switch"><input type="checkbox" id="gpu-jpeg"><span class="switch-track" aria-hidden="true"></span><span><?= e('Save the pictures as JPEG') ?></span></label>
+          <label id="gpu-quality-wrap" hidden><?= e('JPEG quality') ?><span class="range-row"><input type="range" id="gpu-quality" min="50" max="100" value="85"><output id="gpu-quality-value">85</output></span></label>
+          <p class="hint"><?= e('The pictures made on the GPU come as PNG, which loses nothing but gets heavy: at 8K or more each one takes tens of megabytes. With this on, the notebook saves them as JPEG before sending them, several times smaller, with no difference to see at 85. It counts for new pictures and for edits, Upscale, Expand, Photoreal and Enhance on the GPU, here and through MCP. A request that asks for JPEG or WebP itself (More options › Format) keeps its own.') ?></p>
         </div>
         <div class="settings-card stack" id="lora-card">
           <h4>LoRAs</h4>
