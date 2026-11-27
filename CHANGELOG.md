@@ -4,7 +4,7 @@ What changed in each version of Atelier. Versions follow [Semantic Versioning](h
 
 To update an install, replace the app files with the ones from the new zip and keep `config.php`, `data-dir.php` (if present) and the data folder.
 
-## [Unreleased]
+## [1.7.0] - 2026-11-26
 
 ### Pictures on the GPU
 
@@ -168,6 +168,7 @@ The first public release.
 - English and Brazilian Portuguese.
 - PHP 8.2 or newer with SQLite, no build step. Long requests keep going in the background, or in a separate process (`bin/worker.php`) on hosts that stop web processes early.
 
+[1.7.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.7.0
 [1.6.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.6.0
 [1.5.0]: https://github.com/JohanKRS/atelier/releases/tag/v1.5.0
 [1.4.3]: https://github.com/JohanKRS/atelier/releases/tag/v1.4.3
